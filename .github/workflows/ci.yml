@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (warnings are errors)
+        run: swift build -Xswiftc -warnings-as-errors
+
+      - name: Self-check
+        run: swift run diffkit-selfcheck
+
+      # -O compiles asserts out; the self-check must refuse rather than pass having checked nothing.
+      - name: Self-check refuses a release build
+        run: |
+          swift build -c release -Xswiftc -warnings-as-errors
+          if .build/release/diffkit-selfcheck; then
+            echo "::error::diffkit-selfcheck passed in a release build, where its asserts are compiled out"
+            exit 1
+          fi
+
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild -quiet -scheme DiffKit -destination 'generic/platform=iOS Simulator' build
+          xcodebuild -quiet -scheme diffkit-preview -destination 'generic/platform=iOS Simulator' build
+
+      # Not a pass/fail check: the rendered diffs, for a reviewer to look at.
+      - name: Render harness snapshots
+        run: |
+          swift run diffkit-preview --snapshot snapshots/light --light
+          swift run diffkit-preview --snapshot snapshots/dark --dark
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snapshots
+          path: snapshots/
