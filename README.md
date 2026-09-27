@@ -127,3 +127,7 @@ uploads light and dark harness snapshots as an artifact.
 - The line-number gutter has one column: the new file's number, falling back to the old.
 - The `files(fromGitDiff:)` check is `DiffParser.gitDiffDemo()` rather than `demo()`,
   because `DiffParser.demo()` checks the parser.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
