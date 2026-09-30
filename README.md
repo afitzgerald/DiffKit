@@ -61,6 +61,11 @@ Git and rendering:
   - `.patchSelection(Set<Int>)`: tints the rows with those `DiffLine.id`s. The host owns
     the selection. The ids are the ones `DiffParser.parse(file.patch)` assigns, and they
     are stable for a given patch.
+- `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
+  iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
+  It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.
+  - `.onPatchFilesEnd { … }`: on the last file, "next" becomes a checkmark that calls this,
+    e.g. to close the diff. Without it, "next" is disabled there.
 
 ## Self-check
 
@@ -100,12 +105,16 @@ swift run diffkit-preview                          # the built-in sample
 git diff | swift run diffkit-preview -             # whatever git prints
 swift run diffkit-preview some.diff                # a saved diff
 swift run diffkit-preview --snapshot out --light   # out/<n>-<file>.png per file, then quit
+scripts/preview-macos.sh                           # same arguments, with the current macOS look
 scripts/preview-ios.sh                             # the same app in the booted iOS Simulator
 DEVICE="iPhone 18 Pro" SCREENSHOT=ios.png scripts/preview-ios.sh
 ```
 
 The harness is an executable target, not a product, so nothing that depends on DiffKit
-builds it. The iOS script needs Xcode, because CommandLineTools has no iOS SDK.
+builds it. The iOS script needs Xcode, because CommandLineTools has no iOS SDK. `swift run`
+stamps the binary with the deployment target (macOS 14) as its SDK version, so macOS 26 and
+later show it with the pre-Liquid Glass look; the macOS script links with the installed SDK's
+version instead. `--snapshot` can't capture glass, so check glass by eye.
 
 ## CI
 
@@ -127,6 +136,13 @@ uploads light and dark harness snapshots as an artifact.
 - The line-number gutter has one column: the new file's number, falling back to the old.
 - The `files(fromGitDiff:)` check is `DiffParser.gitDiffDemo()` rather than `demo()`,
   because `DiffParser.demo()` checks the parser.
+
+## Releases
+
+Tags are `major.minor.patch`. Most releases are point releases (`0.2.1`): fixes and internal
+changes that leave the public API and layout alone. Bump the minor (`0.3.0`) when public API
+is added or changed, or a view lays out differently. Depend on it with
+`.upToNextMinor(from:)` to pick up point releases without a pin bump.
 
 ## License
 

@@ -103,6 +103,12 @@ struct PreviewRoot: View {
                         if selectedLines.remove(line.id) == nil { selectedLines.insert(line.id) }
                         lastTap = "Tapped line \(line.newLine ?? line.oldLine ?? 0) (\(line.kind.rawValue)): \(line.text)"
                     }
+                    .overlay(alignment: .bottomLeading) {
+                        PatchFileStepper(files: files, selection: $selected).padding(12)
+                    }
+                    // Stands in for the host closing its diff screen: back to "Select a file",
+                    // or the file list on iPhone.
+                    .onPatchFilesEnd { selected = nil }
                     .safeAreaInset(edge: .bottom) {
                         Text(lastTap).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
