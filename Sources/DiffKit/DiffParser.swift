@@ -553,3 +553,94 @@ extension DiffParser {
         assert(!isWhitespaceOnly(ws1, against: DiffLine(id: 2, kind: .addition, oldLine: nil, newLine: 1, text: "a = 2")))
     }
 }
+
+// MARK: - Comment anchors
+
+/// Which file of a diff a line number counts in: `left` is the old file, `right` the new. The
+/// same names GitHub's review API uses for a comment's `side`.
+public enum DiffSide: String, Codable, Sendable {
+    case left, right
+}
+
+/// Where a review thread or a queued comment hangs: a line number *and* the file it counts in.
+/// An old-file 12 and a new-file 12 are different lines, and matching on the number alone put
+/// a comment on deleted code beside whatever the new file happened to have at that number.
+public struct DiffAnchor: Equatable, Hashable, Sendable {
+    public var line: Int
+    public var side: DiffSide
+
+    public init(line: Int, side: DiffSide) {
+        self.line = line
+        self.side = side
+    }
+
+    /// The thread after `last` in reading order, wrapping; the first one when nothing was
+    /// jumped to yet, or when `last` has since gone.
+    public static func next(after last: DiffAnchor?, in ordered: [DiffAnchor]) -> DiffAnchor? {
+        guard !ordered.isEmpty else { return nil }
+        let after = last.flatMap { ordered.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+        return ordered[after < ordered.count ? after : 0]
+    }
+}
+
+extension DiffLine {
+    /// Where a new comment on this line goes: the old file for a deletion, the new one otherwise.
+    public var commentAnchor: DiffAnchor? {
+        if kind == .deletion { return oldLine.map { DiffAnchor(line: $0, side: .left) } }
+        return newLine.map { DiffAnchor(line: $0, side: .right) }
+    }
+
+    /// Every anchor this line can *hold* a thread on. Comments compose on one side only
+    /// (`commentAnchor`), but GitHub happily returns a LEFT thread on an unchanged line, and a
+    /// thread with nowhere to draw is a thread the reader never sees.
+    public var threadAnchors: [DiffAnchor] {
+        [oldLine.map { DiffAnchor(line: $0, side: .left) },
+         newLine.map { DiffAnchor(line: $0, side: .right) }].compactMap { $0 }
+    }
+}
+
+extension Array where Element == DiffLine {
+    /// Left column first, each anchor once: a split context row is the *same* DiffLine on both
+    /// sides (DiffParser.pair), so the naive concatenation would draw every thread twice.
+    public var threadAnchors: [DiffAnchor] {
+        var seen: Set<DiffAnchor> = []
+        return flatMap(\.threadAnchors).filter { seen.insert($0).inserted }
+    }
+}
+
+extension DiffAnchor {
+    /// The + button, the composer and the thread list all have to agree on a line's anchor:
+    /// when they didn't, clicking + on a deleted line opened a composer no row could draw.
+    @_spi(Testing) public static func demo() {
+        func line(_ kind: DiffLine.Kind, old: Int?, new: Int?) -> DiffLine {
+            DiffLine(id: 0, kind: kind, oldLine: old, newLine: new, text: "x")
+        }
+        let left12 = DiffAnchor(line: 12, side: .left), right40 = DiffAnchor(line: 40, side: .right)
+        assert(line(.deletion, old: 12, new: nil).commentAnchor == left12)
+        assert(line(.addition, old: nil, new: 40).commentAnchor == right40)
+        // A context line carries both numbers; comments still hang off the new file.
+        assert(line(.context, old: 12, new: 40).commentAnchor == right40)
+        // Same number on either side is a different anchor — markers once matched on the
+        // number alone and drew a deleted-line thread beside an unrelated new line.
+        assert(DiffAnchor(line: 12, side: .left) != DiffAnchor(line: 12, side: .right))
+
+        // A line holds threads on every number it has, even the side it won't compose on.
+        let context = line(.context, old: 12, new: 40)
+        assert(context.threadAnchors == [left12, right40])
+        assert(line(.addition, old: nil, new: 40).threadAnchors == [right40])
+        // Split pairs a context row with the same DiffLine on both sides; drawing it twice
+        // would double every thread on it.
+        assert([context, context].threadAnchors.count == 2)
+        assert([line(.deletion, old: 12, new: nil), line(.addition, old: nil, new: 40)].threadAnchors
+               == [left12, right40])
+
+        // Next thread: first when fresh, in order, wrapping, and restarting when the last
+        // one jumped to has gone (resolved threads still count; a refetch can drop one).
+        let a = DiffAnchor(line: 1, side: .right), b = DiffAnchor(line: 5, side: .left)
+        assert(next(after: nil, in: [a, b]) == a)
+        assert(next(after: a, in: [a, b]) == b)
+        assert(next(after: b, in: [a, b]) == a)
+        assert(next(after: right40, in: [a, b]) == a)
+        assert(next(after: a, in: []) == nil)
+    }
+}

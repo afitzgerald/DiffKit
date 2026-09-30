@@ -25,6 +25,12 @@ Parsing and search:
 - `CodeLanguage`, `SyntaxHighlighter`, `HighlightState`, `HighlightTheme`, `TokenKind`: a small
   built-in highlighter for about 25 languages
 - `FileChange`, `FileChangeStatus`
+- `DiffAnchor` and `DiffSide`: where a review comment hangs, a line number *and* the side it
+  counts in. `DiffLine.commentAnchor` (the one a new comment composes on) and
+  `DiffLine.threadAnchors` (every one a thread can hang on), `DiffAnchor.next(after:in:)` for
+  stepping through them.
+- `FileTree.likelyConflicts(in:baseChanged:)`: the changed paths the base branch has also
+  touched, matched on either name of a rename.
 
 Git and rendering:
 
