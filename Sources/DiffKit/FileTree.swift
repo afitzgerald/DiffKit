@@ -41,6 +41,24 @@ public static func firstPath(of files: [FileChange]) -> String? { fileOrder(for:
     assert(order == ["app/models/x.rb", "app/models/y.rb", "app/config.rb", "zzz.rb"])
     // The initial selection is the top row of the tree, not the first file listed.
     assert(firstPath(of: files) == "app/models/x.rb")
+
+    // Conflict candidates: a file both sides touched, matched on either of its names.
+    var renamed = f("lib/new.rb")
+    renamed.previousPath = "lib/old.rb"
+    let touched = [f("a.rb"), f("b.rb"), renamed]
+    assert(likelyConflicts(in: touched, baseChanged: ["b.rb", "c.rb"]) == ["b.rb"])
+    assert(likelyConflicts(in: touched, baseChanged: ["lib/old.rb"]) == ["lib/new.rb"],
+           "the base edited the file this branch renamed")
+    assert(likelyConflicts(in: touched, baseChanged: []).isEmpty)
+}
+
+/// The changed paths that the base branch has also changed since the fork — where a conflict
+/// can be, by file. A superset: two edits to different parts of one file merge cleanly and are
+/// still listed. Narrowing it to overlapping hunks needs both sides' patches through
+/// `DiffParser`; not done until file-level proves too noisy.
+public static func likelyConflicts(in files: [FileChange], baseChanged: Set<String>) -> Set<String> {
+    Set(files.filter { baseChanged.contains($0.path) || $0.previousPath.map(baseChanged.contains) == true }
+        .map(\.path))
 }
 
 /// Groups paths into a directory trie, then collapses single-child directory chains so

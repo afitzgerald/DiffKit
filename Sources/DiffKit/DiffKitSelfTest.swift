@@ -4,6 +4,7 @@
     public static func run() {
         DiffParser.demo()
         DiffParser.gitDiffDemo()
+        DiffAnchor.demo()
         FileTree.demo()
         DiffFind.demo()
         SyntaxHighlighter.demo()
