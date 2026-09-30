@@ -25,16 +25,30 @@ public struct PatchView: View {
     @State private var model: PatchModel?
     @Environment(\.patchScrollTarget) private var scrollTarget
 
+    public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false) {
+        self.init(file: file, codeSize: codeSize, wrap: wrap,
+                  highlightsSyntax: true, hidesWhitespaceChanges: false)
+    }
+
     /// `highlightsSyntax: false` draws the code as plain text; the word emphasis stays.
     /// `hidesWhitespaceChanges` drops every edit that differs only in whitespace
     /// (`DiffParser.hidingWhitespaceChanges`).
+    ///
+    /// A second initialiser rather than two more defaults on the first, so the original
+    /// `init(file:codeSize:wrap:)` stays exactly as it was.
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false,
-                highlightsSyntax: Bool = true, hidesWhitespaceChanges: Bool = false) {
+                highlightsSyntax: Bool, hidesWhitespaceChanges: Bool = false) {
         self.file = file
         self.codeSize = codeSize
         self.wrap = wrap
         self.highlightsSyntax = highlightsSyntax
         self.hidesWhitespaceChanges = hidesWhitespaceChanges
+    }
+
+    public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false,
+                hidesWhitespaceChanges: Bool) {
+        self.init(file: file, codeSize: codeSize, wrap: wrap,
+                  highlightsSyntax: true, hidesWhitespaceChanges: hidesWhitespaceChanges)
     }
 
     public var body: some View {
