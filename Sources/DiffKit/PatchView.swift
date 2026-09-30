@@ -45,6 +45,10 @@ public struct PatchView: View {
                 ProgressView()
             }
         }
+        // Fill the offered space in every state, not just the diff: otherwise the spinner and
+        // placeholders shrink the view to their own size, and anything the host overlays or
+        // aligns to it (a floating file stepper) jumps around as the state changes.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: file) {
             let file = file
             model = await Task.detached(priority: .userInitiated) { PatchModel(file: file) }.value

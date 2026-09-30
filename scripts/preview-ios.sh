@@ -15,9 +15,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DERIVED="$ROOT/.build/ios-preview"
 APP="$DERIVED/DiffKitPreview.app"
 
+SDK="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+
 cd "$ROOT"
+# xcodebuild stamps the deployment target (18.0) as the binary's SDK version, which runs the
+# app in pre-Liquid Glass compatibility mode on iOS 26+; state the real one to the linker.
 xcodebuild -quiet -scheme diffkit-preview -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath "$DERIVED" build
+  -derivedDataPath "$DERIVED" build \
+  OTHER_LDFLAGS="-Xlinker -platform_version -Xlinker ios-simulator -Xlinker 18.0 -Xlinker $SDK"
 
 if [[ -d "$APP" ]]; then trash "$APP"; fi
 mkdir -p "$APP"
