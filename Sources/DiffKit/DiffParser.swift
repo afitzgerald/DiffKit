@@ -359,6 +359,45 @@ public enum DiffParser {
         return strip(line.text) == strip(other.text)
     }
 
+    /// The hunk's lines with every whitespace-only edit taken out: each run of deletions is
+    /// paired, in order, with the run of additions after it, and a pair that differs only in
+    /// whitespace loses both halves. Dropped rather than redrawn as context, so the line numbers
+    /// that remain still line up.
+    public static func hidingWhitespaceChanges(_ hunk: Hunk) -> [DiffLine] {
+        let lines = hunk.lines
+        var out: [DiffLine] = []
+        var index = 0
+        while index < lines.count {
+            guard lines[index].kind == .deletion else {
+                out.append(lines[index])
+                index += 1
+                continue
+            }
+            var deletions: [DiffLine] = []
+            while index < lines.count, lines[index].kind == .deletion {
+                deletions.append(lines[index])
+                index += 1
+            }
+            var additions: [DiffLine] = []
+            while index < lines.count, lines[index].kind == .addition {
+                additions.append(lines[index])
+                index += 1
+            }
+            var keptDeletions: [DiffLine] = []
+            var keptAdditions: [DiffLine] = []
+            for offset in 0..<max(deletions.count, additions.count) {
+                let d = offset < deletions.count ? deletions[offset] : nil
+                let a = offset < additions.count ? additions[offset] : nil
+                if let d, let a, isWhitespaceOnly(d, against: a) { continue }
+                if let d { keptDeletions.append(d) }
+                if let a { keptAdditions.append(a) }
+            }
+            out.append(contentsOf: keptDeletions)
+            out.append(contentsOf: keptAdditions)
+        }
+        return out
+    }
+
     private static func strip(_ s: String) -> String {
         String(s.unicodeScalars.filter { !CharacterSet.whitespaces.contains($0) }.map(Character.init))
     }

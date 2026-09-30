@@ -8,28 +8,53 @@ import SwiftUI
 /// host passes `codeSize` instead.
 ///
 /// Hooks are environment modifiers, so they reach every `PatchView` below them:
-/// `.patchTheme(_:)` for colours, `.onPatchLineTap { line in … }` to act on a tapped row, and
-/// `.patchSelection(_:)` to tint rows. Rows are identified by `DiffLine.id`, which is stable
-/// for a given patch: it is the id `DiffParser.parse(file.patch)` assigns.
+/// `.patchTheme(_:)` for colours, `.onPatchLineTap { line in … }` to act on a tapped row,
+/// `.patchSelection(_:)` to tint rows, `.patchLineAccessory { line in … }` to draw something at
+/// the end of a row, and `.patchScrollTarget(_:)` to bring a row into view. Rows are identified
+/// by `DiffLine.id`, which is stable for a given patch: it is the id `DiffParser.parse(file.patch)`
+/// assigns.
 public struct PatchView: View {
     let file: FileChange
     let codeSize: Double
     let wrap: Bool
+    let highlightsSyntax: Bool
+    let hidesWhitespaceChanges: Bool
 
     /// Built off the main actor: word emphasis is Myers per paired line and can take real time
     /// on a long minified one (see `DiffParser.maxInlineTokens`).
     @State private var model: PatchModel?
+    @Environment(\.patchScrollTarget) private var scrollTarget
 
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false) {
+        self.init(file: file, codeSize: codeSize, wrap: wrap,
+                  highlightsSyntax: true, hidesWhitespaceChanges: false)
+    }
+
+    /// `highlightsSyntax: false` draws the code as plain text; the word emphasis stays.
+    /// `hidesWhitespaceChanges` drops every edit that differs only in whitespace
+    /// (`DiffParser.hidingWhitespaceChanges`).
+    ///
+    /// A second initialiser rather than two more defaults on the first, so the original
+    /// `init(file:codeSize:wrap:)` stays exactly as it was.
+    public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false,
+                highlightsSyntax: Bool, hidesWhitespaceChanges: Bool = false) {
         self.file = file
         self.codeSize = codeSize
         self.wrap = wrap
+        self.highlightsSyntax = highlightsSyntax
+        self.hidesWhitespaceChanges = hidesWhitespaceChanges
+    }
+
+    public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false,
+                hidesWhitespaceChanges: Bool) {
+        self.init(file: file, codeSize: codeSize, wrap: wrap,
+                  highlightsSyntax: true, hidesWhitespaceChanges: hidesWhitespaceChanges)
     }
 
     public var body: some View {
         Group {
             // The file check keeps a stale model from flashing the previous file's diff.
-            if let model, model.file == file {
+            if let model, model.file == file, model.hidesWhitespaceChanges == hidesWhitespaceChanges {
                 switch model.content {
                 case .diff(let parsed): diff(parsed, model: model)
                 case .binary:
@@ -40,6 +65,9 @@ public struct PatchView: View {
                 case .empty:
                     placeholder("No content changes", "doc",
                                 "Only the file's name, mode or existence changed.")
+                case .whitespaceOnly:
+                    placeholder("Only whitespace changed", "text.alignleft",
+                                "Every change in this file is whitespace, which is hidden.")
                 }
             } else {
                 ProgressView()
@@ -49,9 +77,11 @@ public struct PatchView: View {
         // placeholders shrink the view to their own size, and anything the host overlays or
         // aligns to it (a floating file stepper) jumps around as the state changes.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: file) {
-            let file = file
-            model = await Task.detached(priority: .userInitiated) { PatchModel(file: file) }.value
+        .task(id: ModelKey(file: file, hidesWhitespaceChanges: hidesWhitespaceChanges)) {
+            let file = file, hides = hidesWhitespaceChanges
+            model = await Task.detached(priority: .userInitiated) {
+                PatchModel(file: file, hidesWhitespaceChanges: hides)
+            }.value
         }
     }
 
@@ -64,10 +94,13 @@ public struct PatchView: View {
             ForEach(parsed.hunks) { hunk in
                 Section {
                     ForEach(hunk.lines) { line in
-                        PatchLineRow(line: line, language: model.language,
+                        PatchLineRow(line: line, language: highlightsSyntax ? model.language : .plaintext,
                                      startState: model.highlightStates[line.id] ?? HighlightState(),
                                      emphasis: model.emphasis[line.id] ?? [],
                                      size: codeSize, wrap: wrap)
+                            // A string id of its own: `Hunk.id` is its first line's id, so
+                            // scrolling to the bare number could land on the section instead.
+                            .id(PatchScrollTarget.rowID(line.id))
                     }
                 } header: {
                     PatchHunkHeader(hunk: hunk, size: codeSize)
@@ -81,6 +114,19 @@ public struct PatchView: View {
             }
         }
 
+        ScrollViewReader { proxy in
+            scroller(content, parsed)
+                .onChange(of: scrollTarget) { _, target in
+                    guard let target else { return }
+                    // Leading, not centre: the rows are as wide as the longest line, and `.center`
+                    // scrolled sideways to the middle of it, gutter off screen.
+                    withAnimation { proxy.scrollTo(PatchScrollTarget.rowID(target.lineID), anchor: UnitPoint(x: 0, y: 0.5)) }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func scroller(_ content: some View, _ parsed: ParsedDiff) -> some View {
         if wrap {
             ScrollView(.vertical) { content }
         } else {
@@ -120,13 +166,22 @@ public struct PatchView: View {
 
 // MARK: - Model
 
+/// What a `PatchModel` is built from, as the view's task identity: a new file or a flipped
+/// whitespace setting rebuilds it.
+struct ModelKey: Hashable {
+    let file: FileChange
+    let hidesWhitespaceChanges: Bool
+}
+
 /// Everything `PatchView` derives from a `FileChange`, with no SwiftUI in it.
 struct PatchModel: Sendable {
     enum Content: Sendable {
-        case diff(ParsedDiff), binary, noPatch, empty
+        /// `whitespaceOnly`: there was a diff, and hiding whitespace changes left nothing of it.
+        case diff(ParsedDiff), binary, noPatch, empty, whitespaceOnly
     }
 
     let file: FileChange
+    let hidesWhitespaceChanges: Bool
     let content: Content
     let language: CodeLanguage
     /// Character ranges to emphasise, keyed by `DiffLine.id`.
@@ -134,13 +189,28 @@ struct PatchModel: Sendable {
     /// The highlighter state each row starts in, for rows that do not start clean.
     let highlightStates: [Int: HighlightState]
 
-    init(file: FileChange) {
+    init(file: FileChange, hidesWhitespaceChanges: Bool = false) {
         self.file = file
+        self.hidesWhitespaceChanges = hidesWhitespaceChanges
         if file.isBinary {
             content = .binary
         } else if let patch = file.patch {
             let parsed = DiffParser.parse(patch)
-            content = parsed.isEmpty ? .empty : .diff(parsed)
+            if parsed.isEmpty {
+                content = .empty
+            } else if hidesWhitespaceChanges {
+                var visible = parsed
+                visible.hunks = parsed.hunks.map { hunk in
+                    var hunk = hunk
+                    hunk.lines = DiffParser.hidingWhitespaceChanges(hunk)
+                    return hunk
+                }
+                // Context alone is not a change: a hunk left with nothing added or removed goes.
+                visible.hunks.removeAll { !$0.lines.contains { $0.kind == .addition || $0.kind == .deletion } }
+                content = visible.hunks.isEmpty ? .whitespaceOnly : .diff(visible)
+            } else {
+                content = .diff(parsed)
+            }
         } else {
             content = .noPatch
         }
@@ -246,9 +316,22 @@ public struct PatchTheme {
     }
 }
 
+/// A request to bring a row into view. Each one is new — `PatchScrollTarget(lineID: 7)` twice
+/// scrolls twice — so a host can jump back to the same row, e.g. a file with one comment.
+public struct PatchScrollTarget: Equatable, Sendable {
+    public let lineID: Int
+    private let token = UUID()
+
+    public init(lineID: Int) { self.lineID = lineID }
+
+    static func rowID(_ lineID: Int) -> String { "patch-line-\(lineID)" }
+}
+
 private struct PatchThemeKey: EnvironmentKey { static let defaultValue = PatchTheme() }
 private struct PatchLineTapKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> Void)? = nil }
 private struct PatchSelectionKey: EnvironmentKey { static let defaultValue: Set<Int> = [] }
+private struct PatchLineAccessoryKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
+private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: PatchScrollTarget? = nil }
 
 extension EnvironmentValues {
     var patchTheme: PatchTheme {
@@ -262,6 +345,14 @@ extension EnvironmentValues {
     var patchSelection: Set<Int> {
         get { self[PatchSelectionKey.self] }
         set { self[PatchSelectionKey.self] = newValue }
+    }
+    var patchLineAccessory: ((DiffLine) -> AnyView)? {
+        get { self[PatchLineAccessoryKey.self] }
+        set { self[PatchLineAccessoryKey.self] = newValue }
+    }
+    var patchScrollTarget: PatchScrollTarget? {
+        get { self[PatchScrollTargetKey.self] }
+        set { self[PatchScrollTargetKey.self] = newValue }
     }
 }
 
@@ -281,6 +372,21 @@ extension View {
     /// commented line. The host owns the selection; `PatchView` only draws it.
     public func patchSelection(_ lineIDs: Set<Int>) -> some View {
         environment(\.patchSelection, lineIDs)
+    }
+
+    /// Drawn at the end of every diff row, after the code — a comment count, a marker for
+    /// something the host has queued. Return `EmptyView()` for rows that carry nothing. It is
+    /// kept to its natural size, so it never takes width from the code.
+    public func patchLineAccessory<Accessory: View>(
+        @ViewBuilder _ accessory: @escaping (DiffLine) -> Accessory
+    ) -> some View {
+        environment(\.patchLineAccessory, { AnyView(accessory($0)) })
+    }
+
+    /// Scrolls the row with this `DiffLine.id` into view, vertically centred and scrolled all
+    /// the way left, each time a new target is set. `nil` does nothing.
+    public func patchScrollTarget(_ target: PatchScrollTarget?) -> some View {
+        environment(\.patchScrollTarget, target)
     }
 }
 
@@ -321,6 +427,7 @@ private struct PatchLineRow: View {
     @Environment(\.patchTheme) private var theme
     @Environment(\.patchLineTap) private var onTap
     @Environment(\.patchSelection) private var selection
+    @Environment(\.patchLineAccessory) private var accessory
 
     var body: some View {
         if let onTap {
@@ -355,6 +462,8 @@ private struct PatchLineRow: View {
                 .lineLimit(wrap ? nil : 1)
                 .fixedSize(horizontal: !wrap, vertical: wrap)
                 .textSelection(.enabled)
+
+            if let accessory { accessory(line).fixedSize() }
         }
         .padding(.vertical, 1)
         .padding(.trailing, 8)
@@ -423,6 +532,7 @@ extension PatchView {
             case .binary: return "binary"
             case .noPatch: return "noPatch"
             case .empty: return "empty"
+            case .whitespaceOnly: return "whitespaceOnly"
             }
         }
         func file(_ patch: String?, binary: Bool = false) -> FileChange {
@@ -483,5 +593,25 @@ extension PatchView {
         assert(deleted.hunks[0].rangeHeader == "@@ -1,3 +1,0 @@", "rangeHeader rebuilds from the adjusted starts")
         let combined = DiffParser.parse("@@@ -1 -1 +1 @@@\n  a")
         assert(PatchModel.rangeText(combined.hunks[0]) == "@@@ -1 -1 +1 @@@")
+
+        // Hiding whitespace drops a pair that differs only in indentation, both halves, and
+        // keeps a real edit beside it; a file whose every edit is whitespace says so.
+        let mixed = file("@@ -1,3 +1,3 @@\n keep\n-  indented\n-let a = 1\n+    indented\n+let a = 2")
+        guard case .diff(let shown) = PatchModel(file: mixed, hidesWhitespaceChanges: true).content else {
+            return assert(false, "a real edit survives hiding whitespace")
+        }
+        assert(shown.hunks[0].lines.map(\.text) == ["keep", "let a = 1", "let a = 2"],
+               "\(shown.hunks[0].lines.map(\.text))")
+        guard case .diff(let all) = PatchModel(file: mixed).content else { return assert(false) }
+        assert(all.hunks[0].lines.count == 5, "shown in full when not hiding")
+        assert(content(file("@@ -1 +1 @@\n-  a\n+a")) == "diff")
+        let reindented = PatchModel(file: file("@@ -1,2 +1,2 @@\n ctx\n-  a\n+a"), hidesWhitespaceChanges: true)
+        if case .whitespaceOnly = reindented.content {} else {
+            assert(false, "only whitespace changed, so nothing is left to show")
+        }
+
+        // Asking for the same row twice is two requests, so the second still scrolls.
+        assert(PatchScrollTarget(lineID: 7) != PatchScrollTarget(lineID: 7))
+        assert(PatchScrollTarget.rowID(7) == "patch-line-7")
     }
 }
