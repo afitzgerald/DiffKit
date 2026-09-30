@@ -18,7 +18,8 @@ Parsing and search:
 
 - `DiffParser`: `parse(_:) -> ParsedDiff`, `pair(_:)` (split-view rows),
   `inlineRanges(deleted:added:)` and `inlineRanges(old:new:)` (word-level changes),
-  `unifiedPatch(from:to:)`, `isWhitespaceOnly(_:against:)`
+  `unifiedPatch(from:to:)`, `isWhitespaceOnly(_:against:)`,
+  `hidingWhitespaceChanges(_:)` (a hunk's lines with whitespace-only edits taken out, both halves)
 - `ParsedDiff`, `Hunk` (alias `DiffHunk`), `DiffLine`
 - `FileTree` (`fileOrder(for:)`, `firstPath(of:)`, `tree(of:)`, `Node`): directory-first file order
 - `DiffFind`: case-insensitive search in parsed lines or in a raw patch
@@ -53,11 +54,14 @@ Git and rendering:
   - Colour output: the escapes are stripped. It also handles CRLF content (the `\r` is
     kept) and `\ No newline at end of file`.
   - Additions and deletions are counted from the patch body.
-- `PatchView(file:codeSize:wrap:)`: a unified diff with a line-number gutter, syntax
-  highlighting that carries block comments and multi-line strings from row to row, and
-  word-level emphasis on paired edits. Hunk headers stay pinned while you scroll. It shows
-  placeholders for binary, missing (`patch == nil`) and empty patches, and a note when the
-  diff is cut off at `DiffParser.maxLines`. Parsing, emphasis and highlighter state are
+- `PatchView(file:codeSize:wrap:highlightsSyntax:hidesWhitespaceChanges:)`: a unified diff
+  with a line-number gutter, syntax highlighting that carries block comments and multi-line
+  strings from row to row, and word-level emphasis on paired edits. Hunk headers stay pinned
+  while you scroll. It shows placeholders for binary, missing (`patch == nil`) and empty
+  patches, and a note when the diff is cut off at `DiffParser.maxLines`.
+  - `highlightsSyntax: false` draws the code as plain text; the word emphasis stays.
+  - `hidesWhitespaceChanges: true` drops whitespace-only edits, and says "Only whitespace
+    changed" for a file with nothing else. Parsing, emphasis and highlighter state are
   computed off the main actor. The code text is selectable.
 - Hooks for `PatchView`. They are environment modifiers, so they apply to every
   `PatchView` inside the view they're set on:
@@ -67,6 +71,12 @@ Git and rendering:
   - `.patchSelection(Set<Int>)`: tints the rows with those `DiffLine.id`s. The host owns
     the selection. The ids are the ones `DiffParser.parse(file.patch)` assigns, and they
     are stable for a given patch.
+  - `.patchLineAccessory { line in … }`: a view drawn at the end of each row, after the code,
+    at its natural size — a comment count, a marker for something queued. Return
+    `EmptyView()` for rows with nothing.
+  - `.patchScrollTarget(PatchScrollTarget(lineID:))`: brings that row into view, centred
+    and scrolled fully left. Each target is a new request, so the same row can be asked for
+    twice.
 - `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
   iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
   It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.
