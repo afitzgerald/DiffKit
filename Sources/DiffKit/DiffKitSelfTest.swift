@@ -10,5 +10,6 @@
         SyntaxHighlighter.demo()
         PatchView.demo()
         PatchImagePreview.demo()
+        PatchFileStepper.demo()
     }
 }
