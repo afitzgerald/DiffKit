@@ -77,6 +77,7 @@ struct PreviewRoot: View {
     @State private var codeSize = 12.0
     @State private var wrap = false
     @State private var split = false
+    @State private var gutterTaps = false
     @State private var customTheme = false
     @State private var selectedLines: Set<Int> = []
     @State private var lastTap = "Tap a row to select it"
@@ -101,6 +102,17 @@ struct PreviewRoot: View {
                     .patchTheme(customTheme ? Self.contrast : PatchTheme())
                     .patchSelection(selectedLines)
                     .patchLayout(split ? .split : .unified)
+                    .patchLineTapTarget(gutterTaps ? .gutter : .row)
+                    // Under each selected line's comment anchor, standing in for a thread.
+                    .patchLineAttachment { anchor in
+                        if selectedAnchors(in: file).contains(anchor) {
+                            Text("Attached under \(anchor.side == .left ? "old" : "new") line \(anchor.line)")
+                                .font(.caption)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.secondary.opacity(0.1))
+                        }
+                    }
                     .onPatchLineTap { line in
                         if selectedLines.remove(line.id) == nil { selectedLines.insert(line.id) }
                         lastTap = "Tapped line \(line.newLine ?? line.oldLine ?? 0) (\(line.kind.rawValue)): \(line.text)"
@@ -127,6 +139,7 @@ struct PreviewRoot: View {
             Stepper("Code size \(Int(codeSize))", value: $codeSize, in: 8...20)
             Toggle("Wrap", isOn: $wrap)
             Toggle("Split", isOn: $split)
+            Toggle("Gutter taps", isOn: $gutterTaps)
             Toggle("Custom theme", isOn: $customTheme)
         }
         .onChange(of: selected) { selectedLines = [] }
@@ -136,6 +149,11 @@ struct PreviewRoot: View {
             if let snapshotDir { await snapshot(into: snapshotDir) }
             #endif
         }
+    }
+
+    private func selectedAnchors(in file: FileChange) -> Set<DiffAnchor> {
+        Set(DiffParser.parse(file.patch ?? "").hunks.flatMap(\.lines)
+            .filter { selectedLines.contains($0.id) }.compactMap(\.commentAnchor))
     }
 
     /// A deliberately loud theme, so the toggle shows every colour is actually wired through.

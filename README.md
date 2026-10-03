@@ -80,11 +80,18 @@ Git and rendering:
   - `.patchScrollTarget(PatchScrollTarget(lineID:))`: brings that row into view, centred
     and scrolled fully left. Each target is a new request, so the same row can be asked for
     twice. A target set before the rows have loaded is scrolled to once they have.
+  - `.patchLineAttachment { anchor in … }`: a view drawn under a row, full width, once for each
+    `DiffAnchor` a thread can hang on (`DiffLine.threadAnchors`; in split view both halves', each
+    once). For the threads on a line and a composer opened on it. Return `EmptyView()` for
+    anchors with nothing. Unwrapped, an attachment is held to the visible width.
+  - `.patchLineTapTarget(.gutter)`: `.onPatchLineTap` listens on the line number only, so a
+    click in the code still selects text. `.row`, the whole row, is the default.
   - `.patchLayout(.split)`: old on the left, new on the right, each deletion paired with the
     addition that replaced it and the shorter side filled. Each half shows its own side's line
     numbers. Unified (`.unified`) is the default. Every other hook works the same in both, and a
     scroll target finds a line's row in either. Unwrapped, each half is as wide as the longest
-    line, so the pair scrolls sideways together; it needs a wide window, not a phone.
+    line, so the pair scrolls sideways together; it needs a wide window, not a phone. A context
+    line's accessory is drawn on the right half only.
   - `.patchFind(query, current: match)`: tints every occurrence of `query`, and `current` (one
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are

@@ -24,7 +24,12 @@ public struct PatchView: View {
     /// on a long minified one (see `DiffParser.maxInlineTokens`).
     @State private var model: PatchModel?
     @Environment(\.patchScrollTarget) private var scrollTarget
+    @Environment(\.patchLineAccessory) private var accessory
     @Environment(\.patchLayout) private var layout
+    @Environment(\.patchLineAttachment) private var attachment
+    /// The visible width, which attachments are held to: in an unwrapped diff the column is as
+    /// wide as the longest line, and a thread laid across it ran off screen to the right.
+    @State private var viewportWidth: CGFloat = 0
 
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false) {
         self.init(file: file, codeSize: codeSize, wrap: wrap,
@@ -96,12 +101,14 @@ public struct PatchView: View {
                 Section {
                     if layout == .split {
                         ForEach(model.splitRows[index]) { pair in
-                            splitRow(pair, model: model, halfWidth: wrap ? nil : width(of: parsed))
-                                .id(pair.id)
+                            withAttachments([pair.left, pair.right].compactMap { $0 }.threadAnchors) {
+                                splitRow(pair, model: model, halfWidth: wrap ? nil : width(of: parsed))
+                            }
+                            .id(pair.id)
                         }
                     } else {
                         ForEach(hunk.lines) { line in
-                            row(line, model: model, gutter: .unified)
+                            withAttachments(line.threadAnchors) { row(line, model: model, gutter: .unified) }
                                 // A string id of its own: `Hunk.id` is its first line's id, so
                                 // scrolling to the bare number could land on the section instead.
                                 .id(PatchScrollTarget.rowID(line.id))
@@ -130,6 +137,7 @@ public struct PatchView: View {
                 withAnimation { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.5)) }
             }
             scroller(content, parsed)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewportWidth = $0 }
                 .onChange(of: scrollTarget) { _, target in scroll(target) }
                 // A target set while the model was still building — a host that opens a file
                 // at a find match — arrives before these rows exist, and onChange never sees it.
@@ -180,6 +188,24 @@ public struct PatchView: View {
                      size: codeSize, wrap: wrap, gutter: gutter)
     }
 
+    /// A row with the host's attachments under it, one per anchor, full width. Without the
+    /// hook it is the row alone, so a diff that attaches nothing lays out exactly as before.
+    @ViewBuilder
+    private func withAttachments(_ anchors: [DiffAnchor], @ViewBuilder row: () -> some View) -> some View {
+        if let attachment, !anchors.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                row()
+                ForEach(anchors, id: \.self) { anchor in
+                    attachment(anchor)
+                        .frame(maxWidth: wrap || viewportWidth == 0 ? .infinity : viewportWidth,
+                               alignment: .leading)
+                }
+            }
+        } else {
+            row()
+        }
+    }
+
     /// Old on the left, new on the right, each half numbered by its own side and unmarked —
     /// the colour says which is which. `halfWidth` is nil when wrapping, and the halves split
     /// the width evenly instead.
@@ -200,6 +226,8 @@ public struct PatchView: View {
         Group {
             if let line {
                 row(line, model: model, gutter: gutter)
+                    .environment(\.patchLineAccessory,
+                                 PatchLineRow.drawsAccessory(line, gutter: gutter) ? accessory : nil)
             } else {
                 // Opposite an unpaired insertion or deletion: a fill, never a blank hole.
                 Color.secondary.opacity(0.07)
@@ -352,6 +380,15 @@ struct SplitRow: Identifiable, Sendable {
 
 // MARK: - Hooks
 
+/// What `.onPatchLineTap` listens on. Set with `.patchLineTapTarget(_:)`.
+public enum PatchLineTapTarget: Sendable {
+    /// The whole row: a phone's finger needs the room, and a 28-point gutter is a sliver.
+    case row
+    /// The line number only, so a click in the code still places a text selection rather
+    /// than acting on the line — what a pointer wants.
+    case gutter
+}
+
 /// How `PatchView` lays a diff out. Set with `.patchLayout(_:)`; unified by default.
 public enum PatchLayout: Sendable {
     /// One column, deletions above their additions.
@@ -413,6 +450,8 @@ private struct PatchLineAccessoryKey: EnvironmentKey { static let defaultValue: 
 private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: PatchScrollTarget? = nil }
 private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
 private struct PatchLayoutKey: EnvironmentKey { static let defaultValue = PatchLayout.unified }
+private struct PatchLineAttachmentKey: EnvironmentKey { static let defaultValue: ((DiffAnchor) -> AnyView)? = nil }
+private struct PatchLineTapTargetKey: EnvironmentKey { static let defaultValue = PatchLineTapTarget.row }
 
 /// What `.patchFind(_:current:)` set: the query to tint and the occurrence to tint harder.
 struct PatchFind: Equatable {
@@ -440,6 +479,14 @@ extension EnvironmentValues {
     var patchScrollTarget: PatchScrollTarget? {
         get { self[PatchScrollTargetKey.self] }
         set { self[PatchScrollTargetKey.self] = newValue }
+    }
+    var patchLineAttachment: ((DiffAnchor) -> AnyView)? {
+        get { self[PatchLineAttachmentKey.self] }
+        set { self[PatchLineAttachmentKey.self] = newValue }
+    }
+    var patchLineTapTarget: PatchLineTapTarget {
+        get { self[PatchLineTapTargetKey.self] }
+        set { self[PatchLineTapTargetKey.self] = newValue }
     }
     var patchLayout: PatchLayout {
         get { self[PatchLayoutKey.self] }
@@ -482,6 +529,22 @@ extension View {
     /// the way left, each time a new target is set. `nil` does nothing.
     public func patchScrollTarget(_ target: PatchScrollTarget?) -> some View {
         environment(\.patchScrollTarget, target)
+    }
+
+    /// Drawn under a row, full width, once for each place a review thread can hang on it —
+    /// `DiffLine.threadAnchors`, and in split view both halves', each once. For the threads on
+    /// a line and a composer opened on it. Return `EmptyView()` for anchors with nothing; a
+    /// row with nothing attached keeps its height. In an unwrapped diff an attachment is held
+    /// to the visible width and pinned left, so it reads without scrolling sideways.
+    public func patchLineAttachment<Attachment: View>(
+        @ViewBuilder _ attachment: @escaping (DiffAnchor) -> Attachment
+    ) -> some View {
+        environment(\.patchLineAttachment, { AnyView(attachment($0)) })
+    }
+
+    /// Where `.onPatchLineTap` listens: the whole row (the default) or the line number alone.
+    public func patchLineTapTarget(_ target: PatchLineTapTarget) -> some View {
+        environment(\.patchLineTapTarget, target)
     }
 
     /// Lays every `PatchView` inside this view out unified (the default) or split. Split pairs
@@ -545,9 +608,10 @@ private struct PatchLineRow: View {
     @Environment(\.patchSelection) private var selection
     @Environment(\.patchLineAccessory) private var accessory
     @Environment(\.patchFind) private var find
+    @Environment(\.patchLineTapTarget) private var tapTarget
 
     var body: some View {
-        if let onTap {
+        if let onTap, tapTarget == .row {
             // Only with a handler: an idle tap gesture would still compete with scrolling
             // and with text selection.
             row.contentShape(Rectangle()).onTapGesture { onTap(line) }
@@ -556,12 +620,28 @@ private struct PatchLineRow: View {
         }
     }
 
+    /// A split context row is the same line on both halves; its accessory — a comment count —
+    /// is drawn once, on the right, where `commentAnchor` puts a new comment.
+    static func drawsAccessory(_ line: DiffLine, gutter: Gutter) -> Bool {
+        !(gutter == .old && line.kind != .deletion)
+    }
+
+    @ViewBuilder
+    private var gutterView: some View {
+        let number = Text(gutterText)
+            .font(.system(size: size - 2, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .frame(width: max(28, size * 2.6), alignment: .trailing)
+        if let onTap, tapTarget == .gutter {
+            number.contentShape(Rectangle()).onTapGesture { onTap(line) }
+        } else {
+            number
+        }
+    }
+
     private var row: some View {
         HStack(alignment: .top, spacing: 6) {
-            Text(gutterText)
-                .font(.system(size: size - 2, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .frame(width: max(28, size * 2.6), alignment: .trailing)
+            gutterView
 
             // fixedSize, or the widest row in the file loses its marker: the HStack hands the
             // leftover width to its flexible children, and on the row that fills the whole
@@ -761,6 +841,15 @@ extension PatchView {
         // their own: named for the right side alone, they would all collide.
         let shrunk = PatchModel(file: file("@@ -1,3 +1,1 @@\n-a\n-b\n-c\n+d")).splitRows[0]
         assert(shrunk.count == 3 && Set(shrunk.map(\.id)).count == 3, "\(shrunk.map(\.id))")
+
+        // A split context row's accessory is drawn on the right half only; a deletion's on the
+        // left, where it is the only line; unified always.
+        let ctx = DiffLine(id: 0, kind: .context, oldLine: 1, newLine: 1, text: "x")
+        let del = DiffLine(id: 1, kind: .deletion, oldLine: 2, newLine: nil, text: "y")
+        assert(!PatchLineRow.drawsAccessory(ctx, gutter: .old), "drawn once, not on both halves")
+        assert(PatchLineRow.drawsAccessory(ctx, gutter: .new))
+        assert(PatchLineRow.drawsAccessory(del, gutter: .old))
+        assert(PatchLineRow.drawsAccessory(ctx, gutter: .unified))
 
         // Asking for the same row twice is two requests, so the second still scrolls.
         assert(PatchScrollTarget(lineID: 7) != PatchScrollTarget(lineID: 7))
