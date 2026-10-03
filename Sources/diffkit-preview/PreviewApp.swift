@@ -78,6 +78,7 @@ struct PreviewRoot: View {
     @State private var wrap = false
     @State private var split = false
     @State private var gutterTaps = false
+    @State private var bothNumbers = false
     @State private var customTheme = false
     @State private var selectedLines: Set<Int> = []
     @State private var lastTap = "Tap a row to select it"
@@ -103,6 +104,7 @@ struct PreviewRoot: View {
                     .patchSelection(selectedLines)
                     .patchLayout(split ? .split : .unified)
                     .patchLineTapTarget(gutterTaps ? .gutter : .row)
+                    .patchLineNumbers(bothNumbers ? .both : .one)
                     // macOS: a + at the end of the row under the pointer, as a host's comment button.
                     .patchLineHover { line in
                         Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
@@ -145,6 +147,7 @@ struct PreviewRoot: View {
             Toggle("Wrap", isOn: $wrap)
             Toggle("Split", isOn: $split)
             Toggle("Gutter taps", isOn: $gutterTaps)
+            Toggle("Old and new numbers", isOn: $bothNumbers)
             Toggle("Custom theme", isOn: $customTheme)
         }
         .onChange(of: selected) { selectedLines = [] }
@@ -182,6 +185,7 @@ struct PreviewRoot: View {
             selected = code.id
             try? await Task.sleep(for: .milliseconds(100))   // let onChange clear the selection first
             customTheme = true
+            bothNumbers = true
             selectedLines = Set(DiffParser.parse(code.patch ?? "").hunks.first?.lines.dropFirst(2).prefix(3).map(\.id) ?? [])
             await capture(dir.appendingPathComponent("hooks.png"))
             // And split, with the same selection, so the hooks are seen working in both layouts.
