@@ -22,7 +22,10 @@ Parsing and search:
   `hidingWhitespaceChanges(_:)` (a hunk's lines with whitespace-only edits taken out, both halves)
 - `ParsedDiff`, `Hunk` (alias `DiffHunk`), `DiffLine`
 - `FileTree` (`fileOrder(for:)`, `firstPath(of:)`, `tree(of:)`, `Node`): directory-first file order
-- `DiffFind`: case-insensitive search in parsed lines or in a raw patch
+- `DiffFind`: case-insensitive search in parsed lines or in a raw patch, and find across files:
+  `matches(in:query:hidesWhitespaceChanges:)` (the matches in the rows `PatchView` draws, in
+  order), `totals(in:query:current:localCount:)` ("12 of 40" across a change, async and
+  cancellable) and `nextFile(in:from:delta:query:)` (where stepping past a file's last match goes)
 - `CodeLanguage`, `SyntaxHighlighter`, `HighlightState`, `HighlightTheme`, `TokenKind`: a small
   built-in highlighter for about 25 languages
 - `FileChange`, `FileChangeStatus`
@@ -76,7 +79,11 @@ Git and rendering:
     `EmptyView()` for rows with nothing.
   - `.patchScrollTarget(PatchScrollTarget(lineID:))`: brings that row into view, centred
     and scrolled fully left. Each target is a new request, so the same row can be asked for
-    twice.
+    twice. A target set before the rows have loaded is scrolled to once they have.
+  - `.patchFind(query, current: match)`: tints every occurrence of `query`, and `current` (one
+    of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
+    to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
+    `PatchTheme.findMatch` and `.findCurrent`.
 - `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
   iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
   It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.

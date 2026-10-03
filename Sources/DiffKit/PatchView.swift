@@ -115,13 +115,17 @@ public struct PatchView: View {
         }
 
         ScrollViewReader { proxy in
+            // Leading, not centre: the rows are as wide as the longest line, and `.center`
+            // scrolled sideways to the middle of it, gutter off screen.
+            let scroll = { (target: PatchScrollTarget?) in
+                guard let target else { return }
+                withAnimation { proxy.scrollTo(PatchScrollTarget.rowID(target.lineID), anchor: UnitPoint(x: 0, y: 0.5)) }
+            }
             scroller(content, parsed)
-                .onChange(of: scrollTarget) { _, target in
-                    guard let target else { return }
-                    // Leading, not centre: the rows are as wide as the longest line, and `.center`
-                    // scrolled sideways to the middle of it, gutter off screen.
-                    withAnimation { proxy.scrollTo(PatchScrollTarget.rowID(target.lineID), anchor: UnitPoint(x: 0, y: 0.5)) }
-                }
+                .onChange(of: scrollTarget) { _, target in scroll(target) }
+                // A target set while the model was still building — a host that opens a file
+                // at a find match — arrives before these rows exist, and onChange never sees it.
+                .onAppear { scroll(scrollTarget) }
         }
     }
 
@@ -192,28 +196,7 @@ struct PatchModel: Sendable {
     init(file: FileChange, hidesWhitespaceChanges: Bool = false) {
         self.file = file
         self.hidesWhitespaceChanges = hidesWhitespaceChanges
-        if file.isBinary {
-            content = .binary
-        } else if let patch = file.patch {
-            let parsed = DiffParser.parse(patch)
-            if parsed.isEmpty {
-                content = .empty
-            } else if hidesWhitespaceChanges {
-                var visible = parsed
-                visible.hunks = parsed.hunks.map { hunk in
-                    var hunk = hunk
-                    hunk.lines = DiffParser.hidingWhitespaceChanges(hunk)
-                    return hunk
-                }
-                // Context alone is not a change: a hunk left with nothing added or removed goes.
-                visible.hunks.removeAll { !$0.lines.contains { $0.kind == .addition || $0.kind == .deletion } }
-                content = visible.hunks.isEmpty ? .whitespaceOnly : .diff(visible)
-            } else {
-                content = .diff(parsed)
-            }
-        } else {
-            content = .noPatch
-        }
+        content = Self.content(of: file, hidesWhitespaceChanges: hidesWhitespaceChanges)
         guard case .diff(let parsed) = content else {
             language = .plaintext; emphasis = [:]; highlightStates = [:]
             return
@@ -223,6 +206,25 @@ struct PatchModel: Sendable {
         language = CodeLanguage.detect(path: file.path, firstLine: firstLine)
         emphasis = Self.emphasis(for: parsed)
         highlightStates = Self.highlightStates(for: parsed, language: language)
+    }
+
+    /// What the view shows for a file, without the emphasis and highlighter work — all that
+    /// `DiffFind.matches(in:query:hidesWhitespaceChanges:)` needs to search the same rows.
+    static func content(of file: FileChange, hidesWhitespaceChanges: Bool) -> Content {
+        if file.isBinary { return .binary }
+        guard let patch = file.patch else { return .noPatch }
+        let parsed = DiffParser.parse(patch)
+        if parsed.isEmpty { return .empty }
+        guard hidesWhitespaceChanges else { return .diff(parsed) }
+        var visible = parsed
+        visible.hunks = parsed.hunks.map { hunk in
+            var hunk = hunk
+            hunk.lines = DiffParser.hidingWhitespaceChanges(hunk)
+            return hunk
+        }
+        // Context alone is not a change: a hunk left with nothing added or removed goes.
+        visible.hunks.removeAll { !$0.lines.contains { $0.kind == .addition || $0.kind == .deletion } }
+        return visible.hunks.isEmpty ? .whitespaceOnly : .diff(visible)
     }
 
     /// Walks each hunk once per side, so a block comment or multi-line string that opens on
@@ -297,6 +299,10 @@ public struct PatchTheme {
     public var removedEmphasis: Color
     /// Over rows named in `.patchSelection(_:)`.
     public var selection: Color
+    /// Behind every occurrence of the `.patchFind(_:current:)` query, and the current one.
+    /// Properties rather than `init` parameters, so the initialiser stays the 0.3.0 symbol.
+    public var findMatch = Color.yellow.opacity(0.35)
+    public var findCurrent = Color.orange.opacity(0.7)
     public var syntax: HighlightTheme
 
     public init(added: Color = DiffTheme.added, removed: Color = DiffTheme.removed,
@@ -332,6 +338,13 @@ private struct PatchLineTapKey: EnvironmentKey { static let defaultValue: ((Diff
 private struct PatchSelectionKey: EnvironmentKey { static let defaultValue: Set<Int> = [] }
 private struct PatchLineAccessoryKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: PatchScrollTarget? = nil }
+private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
+
+/// What `.patchFind(_:current:)` set: the query to tint and the occurrence to tint harder.
+struct PatchFind: Equatable {
+    var query = ""
+    var current: DiffFind.Match?
+}
 
 extension EnvironmentValues {
     var patchTheme: PatchTheme {
@@ -353,6 +366,10 @@ extension EnvironmentValues {
     var patchScrollTarget: PatchScrollTarget? {
         get { self[PatchScrollTargetKey.self] }
         set { self[PatchScrollTargetKey.self] = newValue }
+    }
+    var patchFind: PatchFind {
+        get { self[PatchFindKey.self] }
+        set { self[PatchFindKey.self] = newValue }
     }
 }
 
@@ -387,6 +404,14 @@ extension View {
     /// the way left, each time a new target is set. `nil` does nothing.
     public func patchScrollTarget(_ target: PatchScrollTarget?) -> some View {
         environment(\.patchScrollTarget, target)
+    }
+
+    /// Tints every case-insensitive occurrence of `query` in the code, and `current` — one of
+    /// `DiffFind.matches(in:query:hidesWhitespaceChanges:)` — more strongly. The host owns the
+    /// query and steps through the matches; scroll to one with `.patchScrollTarget(_:)`. An
+    /// empty query tints nothing.
+    public func patchFind(_ query: String, current: DiffFind.Match? = nil) -> some View {
+        environment(\.patchFind, PatchFind(query: query, current: current))
     }
 }
 
@@ -428,6 +453,7 @@ private struct PatchLineRow: View {
     @Environment(\.patchLineTap) private var onTap
     @Environment(\.patchSelection) private var selection
     @Environment(\.patchLineAccessory) private var accessory
+    @Environment(\.patchFind) private var find
 
     var body: some View {
         if let onTap {
@@ -511,10 +537,18 @@ private struct PatchLineRow: View {
                                                 theme: theme.syntax)
         let tint = line.kind == .addition ? theme.addedEmphasis : theme.removedEmphasis
         let count = text.characters.count
-        for range in emphasis where range.upperBound <= count {
+        func paint(_ range: Range<Int>, _ color: Color) {
+            guard range.upperBound <= count else { return }
             let lower = text.characters.index(text.startIndex, offsetBy: range.lowerBound)
             let upper = text.characters.index(lower, offsetBy: range.count)
-            text[lower..<upper].backgroundColor = tint
+            text[lower..<upper].backgroundColor = color
+        }
+        for range in emphasis { paint(range, tint) }
+        // After the emphasis, so a match inside a changed word still shows as a match. Searched
+        // per visible row rather than looked up: the rows are lazy, and one line is cheap.
+        for range in DiffFind.ranges(in: line.text, query: find.query) {
+            let isCurrent = find.current?.lineID == line.id && find.current?.range == range
+            paint(range, isCurrent ? theme.findCurrent : theme.findMatch)
         }
         return text
     }
