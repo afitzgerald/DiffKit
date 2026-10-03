@@ -87,8 +87,12 @@ Git and rendering:
 - `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
   iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
   It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.
-  - `.onPatchFilesEnd { … }`: on the last file, "next" becomes a checkmark that calls this,
-    e.g. to close the diff. Without it, "next" is disabled there.
+  - `PatchFileStepper(files:selection:viewed:)`: for a review loop. "Next" adds the current
+    file to `viewed` and goes to the next file not in it, wrapping. "Previous" still goes to
+    the file before, viewed or not.
+  - `.onPatchFilesEnd { … }`: on the last file (with `viewed:`, when no other file is
+    unviewed), "next" becomes a checkmark that calls this, e.g. to close the diff. Without
+    it, "next" is disabled there.
 
 ## Self-check
 
