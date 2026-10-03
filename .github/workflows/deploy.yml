@@ -1,0 +1,44 @@
+name: Deploy
+
+# Runs after CI finishes on main (right after a PR merges and the post-merge run goes green)
+# and tags the merge as the next point release — scripts/next_version.sh. The tag is the
+# release: SwiftPM resolves it directly, so there is nothing to build or upload.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Serialize: two CI runs completing close together (two merges in quick succession) must not
+# both compute the same "next version". Never cancel a run in progress; it may have tagged.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    # `push` only: workflow_run also fires for CI runs on pull requests whose head branch
+    # happens to be named main, e.g. from a fork.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: version
+        run: echo "next=$(scripts/next_version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push
+        if: steps.version.outputs.next != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.next }}" -m "${{ steps.version.outputs.next }}"
+          git push origin "${{ steps.version.outputs.next }}"
