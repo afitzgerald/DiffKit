@@ -84,6 +84,9 @@ Git and rendering:
     `DiffAnchor` a thread can hang on (`DiffLine.threadAnchors`; in split view both halves', each
     once). For the threads on a line and a composer opened on it. Return `EmptyView()` for
     anchors with nothing. Unwrapped, an attachment is held to the visible width.
+  - `.patchLineNumbers(.both)`: a unified diff shows the old and new line numbers side by side.
+    `.one`, the new number falling back to the old, is the default. Split view always numbers
+    each half by its own side.
   - `.patchLineHover { line in … }`: a view overlaid at the trailing edge of the row under the
     pointer, such as a + that starts a comment. Pointer only, so a phone never shows it; in split
     view, once per line, on the half a new comment composes on.

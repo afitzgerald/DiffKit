@@ -27,6 +27,7 @@ public struct PatchView: View {
     @Environment(\.patchLineAccessory) private var accessory
     @Environment(\.patchLineHover) private var hover
     @Environment(\.patchLayout) private var layout
+    @Environment(\.patchLineNumbers) private var lineNumbers
     @Environment(\.patchLineAttachment) private var attachment
     /// The visible width, which attachments are held to: in an unwrapped diff the column is as
     /// wide as the longest line, and a thread laid across it ran off screen to the right.
@@ -109,7 +110,9 @@ public struct PatchView: View {
                         }
                     } else {
                         ForEach(hunk.lines) { line in
-                            withAttachments(line.threadAnchors) { row(line, model: model, gutter: .unified) }
+                            withAttachments(line.threadAnchors) {
+                                row(line, model: model, gutter: lineNumbers == .both ? .both : .unified)
+                            }
                                 // A string id of its own: `Hunk.id` is its first line's id, so
                                 // scrolling to the bare number could land on the section instead.
                                 .id(PatchScrollTarget.rowID(line.id))
@@ -177,7 +180,9 @@ public struct PatchView: View {
     private func width(of parsed: ParsedDiff) -> CGFloat {
         let chars = parsed.hunks.flatMap(\.lines).map(\.text.count).max() ?? 0
         let advance = codeSize * 0.6
-        let gutter = max(28, codeSize * 2.6)
+        // Two number columns only in a unified diff: each split half numbers its own side.
+        let columns: CGFloat = lineNumbers == .both && layout == .unified ? 2 : 1
+        let gutter = max(28, codeSize * 2.6) * columns
         // gutter + spacing + marker + spacing + trailing padding, then the code itself with slack.
         return gutter + 20 + advance + Double(chars + 2) * advance
     }
@@ -383,6 +388,15 @@ struct SplitRow: Identifiable, Sendable {
 
 // MARK: - Hooks
 
+/// The line numbers a unified diff shows. Set with `.patchLineNumbers(_:)`.
+public enum PatchLineNumbers: Sendable {
+    /// One column, the new file's number falling back to the old: on a phone the numbers are
+    /// orientation, not something you read.
+    case one
+    /// The old file's number and the new file's, side by side.
+    case both
+}
+
 /// What `.onPatchLineTap` listens on. Set with `.patchLineTapTarget(_:)`.
 public enum PatchLineTapTarget: Sendable {
     /// The whole row: a phone's finger needs the room, and a 28-point gutter is a sliver.
@@ -454,6 +468,7 @@ private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: P
 private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
 private struct PatchLayoutKey: EnvironmentKey { static let defaultValue = PatchLayout.unified }
 private struct PatchLineAttachmentKey: EnvironmentKey { static let defaultValue: ((DiffAnchor) -> AnyView)? = nil }
+private struct PatchLineNumbersKey: EnvironmentKey { static let defaultValue = PatchLineNumbers.one }
 private struct PatchLineHoverKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchLineTapTargetKey: EnvironmentKey { static let defaultValue = PatchLineTapTarget.row }
 
@@ -487,6 +502,10 @@ extension EnvironmentValues {
     var patchLineAttachment: ((DiffAnchor) -> AnyView)? {
         get { self[PatchLineAttachmentKey.self] }
         set { self[PatchLineAttachmentKey.self] = newValue }
+    }
+    var patchLineNumbers: PatchLineNumbers {
+        get { self[PatchLineNumbersKey.self] }
+        set { self[PatchLineNumbersKey.self] = newValue }
     }
     var patchLineHover: ((DiffLine) -> AnyView)? {
         get { self[PatchLineHoverKey.self] }
@@ -548,6 +567,12 @@ extension View {
         @ViewBuilder _ attachment: @escaping (DiffAnchor) -> Attachment
     ) -> some View {
         environment(\.patchLineAttachment, { AnyView(attachment($0)) })
+    }
+
+    /// The line-number columns of a unified diff: `.one` (the default) or `.both`, old and new.
+    /// Split view always numbers each half by its own side.
+    public func patchLineNumbers(_ numbers: PatchLineNumbers) -> some View {
+        environment(\.patchLineNumbers, numbers)
     }
 
     /// Overlaid at the trailing edge of a row while the pointer is over it — a + that starts a
@@ -616,7 +641,9 @@ private struct PatchLineRow: View {
     /// Which line number the gutter shows: unified shows the new file's, falling back to the
     /// old, and no more — on a phone the numbers are orientation, not something you read.
     /// Each split half shows its own side's, with no marker beside it.
-    enum Gutter { case unified, old, new }
+    /// `.both` is unified with the old number and the new side by side, for a desktop reader
+    /// who does read them.
+    enum Gutter { case unified, both, old, new }
 
     @Environment(\.patchTheme) private var theme
     @Environment(\.patchLineTap) private var onTap
@@ -662,12 +689,25 @@ private struct PatchLineRow: View {
         !(gutter == .old && line.kind != .deletion)
     }
 
-    @ViewBuilder
-    private var gutterView: some View {
-        let number = Text(gutterText)
+    private func numberText(_ number: Int?) -> some View {
+        Text(number.map(String.init) ?? "")
             .font(.system(size: size - 2, design: .monospaced))
             .foregroundStyle(.tertiary)
             .frame(width: max(28, size * 2.6), alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private var gutterView: some View {
+        let number = Group {
+            if gutter == .both {
+                HStack(spacing: 4) {
+                    numberText(line.oldLineNumber)
+                    numberText(line.newLineNumber)
+                }
+            } else {
+                numberText(gutterNumber)
+            }
+        }
         if let onTap, tapTarget == .gutter {
             number.contentShape(Rectangle()).onTapGesture { onTap(line) }
         } else {
@@ -682,7 +722,7 @@ private struct PatchLineRow: View {
             // fixedSize, or the widest row in the file loses its marker: the HStack hands the
             // leftover width to its flexible children, and on the row that fills the whole
             // scrollable width there is none left, so the +/- is squeezed to nothing.
-            if gutter == .unified {
+            if gutter == .unified || gutter == .both {
                 Text(marker)
                     .font(.system(size: size, design: .monospaced))
                     .foregroundStyle(markerColor)
@@ -709,14 +749,13 @@ private struct PatchLineRow: View {
         .modifier(HoverChrome(line: line, hover: hover, hovering: $hovering))
     }
 
-    private var gutterText: String {
-        let number: Int?
+    /// The one number a single column shows; `.both` draws its own pair.
+    private var gutterNumber: Int? {
         switch gutter {
-        case .unified: number = line.newLineNumber ?? line.oldLineNumber
-        case .old: number = line.oldLineNumber
-        case .new: number = line.newLineNumber
+        case .unified, .both: return line.newLineNumber ?? line.oldLineNumber
+        case .old: return line.oldLineNumber
+        case .new: return line.newLineNumber
         }
-        return number.map(String.init) ?? ""
     }
 
     private var marker: String {
