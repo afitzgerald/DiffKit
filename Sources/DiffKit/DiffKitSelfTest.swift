@@ -9,5 +9,6 @@
         DiffFind.demo()
         SyntaxHighlighter.demo()
         PatchView.demo()
+        PatchFileStepper.demo()
     }
 }
