@@ -84,6 +84,15 @@ Git and rendering:
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
     `PatchTheme.findMatch` and `.findCurrent`.
+- Before/after previews for files whose patch is not the thing to read. Neither fetches: the
+  host reads both revisions whole and passes them in, `nil` for a side that is not there, and
+  the file's status says why (an added file has no "before"). Side by side when there is room,
+  stacked on a phone.
+  - `PatchImagePreview(file:before:after:baseRef:headRef:)`: both images over a transparency
+    checkerboard, with pixel size and file size. `PatchImagePreview.isImage(path:)` names the
+    formats (SVG is text and diffs as code).
+  - `PatchMarkdownPreview(file:before:after:baseRef:headRef:) { text in … }`: both documents,
+    scrolling together, drawn by the host's own markdown renderer.
 - `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
   iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
   It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.
