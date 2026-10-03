@@ -103,6 +103,11 @@ struct PreviewRoot: View {
                     .patchSelection(selectedLines)
                     .patchLayout(split ? .split : .unified)
                     .patchLineTapTarget(gutterTaps ? .gutter : .row)
+                    // macOS: a + at the end of the row under the pointer, as a host's comment button.
+                    .patchLineHover { line in
+                        Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
+                            .help("Line \(line.newLine ?? line.oldLine ?? 0)")
+                    }
                     // Under each selected line's comment anchor, standing in for a thread.
                     .patchLineAttachment { anchor in
                         if selectedAnchors(in: file).contains(anchor) {

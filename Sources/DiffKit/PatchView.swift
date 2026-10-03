@@ -25,6 +25,7 @@ public struct PatchView: View {
     @State private var model: PatchModel?
     @Environment(\.patchScrollTarget) private var scrollTarget
     @Environment(\.patchLineAccessory) private var accessory
+    @Environment(\.patchLineHover) private var hover
     @Environment(\.patchLayout) private var layout
     @Environment(\.patchLineAttachment) private var attachment
     /// The visible width, which attachments are held to: in an unwrapped diff the column is as
@@ -227,7 +228,9 @@ public struct PatchView: View {
             if let line {
                 row(line, model: model, gutter: gutter)
                     .environment(\.patchLineAccessory,
-                                 PatchLineRow.drawsAccessory(line, gutter: gutter) ? accessory : nil)
+                                 PatchLineRow.ownsLineChrome(line, gutter: gutter) ? accessory : nil)
+                    .environment(\.patchLineHover,
+                                 PatchLineRow.ownsLineChrome(line, gutter: gutter) ? hover : nil)
             } else {
                 // Opposite an unpaired insertion or deletion: a fill, never a blank hole.
                 Color.secondary.opacity(0.07)
@@ -451,6 +454,7 @@ private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: P
 private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
 private struct PatchLayoutKey: EnvironmentKey { static let defaultValue = PatchLayout.unified }
 private struct PatchLineAttachmentKey: EnvironmentKey { static let defaultValue: ((DiffAnchor) -> AnyView)? = nil }
+private struct PatchLineHoverKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchLineTapTargetKey: EnvironmentKey { static let defaultValue = PatchLineTapTarget.row }
 
 /// What `.patchFind(_:current:)` set: the query to tint and the occurrence to tint harder.
@@ -483,6 +487,10 @@ extension EnvironmentValues {
     var patchLineAttachment: ((DiffAnchor) -> AnyView)? {
         get { self[PatchLineAttachmentKey.self] }
         set { self[PatchLineAttachmentKey.self] = newValue }
+    }
+    var patchLineHover: ((DiffLine) -> AnyView)? {
+        get { self[PatchLineHoverKey.self] }
+        set { self[PatchLineHoverKey.self] = newValue }
     }
     var patchLineTapTarget: PatchLineTapTarget {
         get { self[PatchLineTapTargetKey.self] }
@@ -540,6 +548,13 @@ extension View {
         @ViewBuilder _ attachment: @escaping (DiffAnchor) -> Attachment
     ) -> some View {
         environment(\.patchLineAttachment, { AnyView(attachment($0)) })
+    }
+
+    /// Overlaid at the trailing edge of a row while the pointer is over it — a + that starts a
+    /// comment, say. Pointer only: nothing hovers on a touch screen, so a phone never shows it.
+    /// In split view it is drawn once per line, on the half where `commentAnchor` composes.
+    public func patchLineHover<Hover: View>(@ViewBuilder _ hover: @escaping (DiffLine) -> Hover) -> some View {
+        environment(\.patchLineHover, { AnyView(hover($0)) })
     }
 
     /// Where `.onPatchLineTap` listens: the whole row (the default) or the line number alone.
@@ -609,6 +624,8 @@ private struct PatchLineRow: View {
     @Environment(\.patchLineAccessory) private var accessory
     @Environment(\.patchFind) private var find
     @Environment(\.patchLineTapTarget) private var tapTarget
+    @Environment(\.patchLineHover) private var hover
+    @State private var hovering = false
 
     var body: some View {
         if let onTap, tapTarget == .row {
@@ -620,9 +637,28 @@ private struct PatchLineRow: View {
         }
     }
 
-    /// A split context row is the same line on both halves; its accessory — a comment count —
-    /// is drawn once, on the right, where `commentAnchor` puts a new comment.
-    static func drawsAccessory(_ line: DiffLine, gutter: Gutter) -> Bool {
+    /// Tracks the pointer only when there is something to show: an idle `onHover` on every
+    /// row of a long diff is a tracking area each, for nothing.
+    private struct HoverChrome: ViewModifier {
+        let line: DiffLine
+        let hover: ((DiffLine) -> AnyView)?
+        @Binding var hovering: Bool
+
+        func body(content: Content) -> some View {
+            if let hover {
+                content
+                    .onHover { hovering = $0 }
+                    .overlay(alignment: .trailing) { if hovering { hover(line).padding(.trailing, 6) } }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// A split context row is the same line on both halves; its accessory and hover view — a
+    /// comment count, a + — are drawn once, on the right, where `commentAnchor` puts a new
+    /// comment.
+    static func ownsLineChrome(_ line: DiffLine, gutter: Gutter) -> Bool {
         !(gutter == .old && line.kind != .deletion)
     }
 
@@ -670,6 +706,7 @@ private struct PatchLineRow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(background)
         .overlay { if selection.contains(line.id) { theme.selection.allowsHitTesting(false) } }
+        .modifier(HoverChrome(line: line, hover: hover, hovering: $hovering))
     }
 
     private var gutterText: String {
@@ -846,10 +883,10 @@ extension PatchView {
         // left, where it is the only line; unified always.
         let ctx = DiffLine(id: 0, kind: .context, oldLine: 1, newLine: 1, text: "x")
         let del = DiffLine(id: 1, kind: .deletion, oldLine: 2, newLine: nil, text: "y")
-        assert(!PatchLineRow.drawsAccessory(ctx, gutter: .old), "drawn once, not on both halves")
-        assert(PatchLineRow.drawsAccessory(ctx, gutter: .new))
-        assert(PatchLineRow.drawsAccessory(del, gutter: .old))
-        assert(PatchLineRow.drawsAccessory(ctx, gutter: .unified))
+        assert(!PatchLineRow.ownsLineChrome(ctx, gutter: .old), "accessory and hover drawn once, not on both halves")
+        assert(PatchLineRow.ownsLineChrome(ctx, gutter: .new))
+        assert(PatchLineRow.ownsLineChrome(del, gutter: .old))
+        assert(PatchLineRow.ownsLineChrome(ctx, gutter: .unified))
 
         // Asking for the same row twice is two requests, so the second still scrolls.
         assert(PatchScrollTarget(lineID: 7) != PatchScrollTarget(lineID: 7))

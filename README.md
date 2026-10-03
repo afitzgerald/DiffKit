@@ -84,6 +84,9 @@ Git and rendering:
     `DiffAnchor` a thread can hang on (`DiffLine.threadAnchors`; in split view both halves', each
     once). For the threads on a line and a composer opened on it. Return `EmptyView()` for
     anchors with nothing. Unwrapped, an attachment is held to the visible width.
+  - `.patchLineHover { line in … }`: a view overlaid at the trailing edge of the row under the
+    pointer, such as a + that starts a comment. Pointer only, so a phone never shows it; in split
+    view, once per line, on the half a new comment composes on.
   - `.patchLineTapTarget(.gutter)`: `.onPatchLineTap` listens on the line number only, so a
     click in the code still selects text. `.row`, the whole row, is the default.
   - `.patchLayout(.split)`: old on the left, new on the right, each deletion paired with the
@@ -91,7 +94,7 @@ Git and rendering:
     numbers. Unified (`.unified`) is the default. Every other hook works the same in both, and a
     scroll target finds a line's row in either. Unwrapped, each half is as wide as the longest
     line, so the pair scrolls sideways together; it needs a wide window, not a phone. A context
-    line's accessory is drawn on the right half only.
+    line's accessory and hover view are drawn on the right half only.
   - `.patchFind(query, current: match)`: tints every occurrence of `query`, and `current` (one
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
