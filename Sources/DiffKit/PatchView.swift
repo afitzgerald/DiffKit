@@ -24,6 +24,7 @@ public struct PatchView: View {
     /// on a long minified one (see `DiffParser.maxInlineTokens`).
     @State private var model: PatchModel?
     @Environment(\.patchScrollTarget) private var scrollTarget
+    @Environment(\.patchLayout) private var layout
 
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false) {
         self.init(file: file, codeSize: codeSize, wrap: wrap,
@@ -91,16 +92,20 @@ public struct PatchView: View {
         // column rather than each row separately — rows sliding independently is what makes
         // a per-row ScrollView unreadable.
         let content = LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(parsed.hunks) { hunk in
+            ForEach(Array(parsed.hunks.enumerated()), id: \.element.id) { index, hunk in
                 Section {
-                    ForEach(hunk.lines) { line in
-                        PatchLineRow(line: line, language: highlightsSyntax ? model.language : .plaintext,
-                                     startState: model.highlightStates[line.id] ?? HighlightState(),
-                                     emphasis: model.emphasis[line.id] ?? [],
-                                     size: codeSize, wrap: wrap)
-                            // A string id of its own: `Hunk.id` is its first line's id, so
-                            // scrolling to the bare number could land on the section instead.
-                            .id(PatchScrollTarget.rowID(line.id))
+                    if layout == .split {
+                        ForEach(model.splitRows[index]) { pair in
+                            splitRow(pair, model: model, halfWidth: wrap ? nil : width(of: parsed))
+                                .id(pair.id)
+                        }
+                    } else {
+                        ForEach(hunk.lines) { line in
+                            row(line, model: model, gutter: .unified)
+                                // A string id of its own: `Hunk.id` is its first line's id, so
+                                // scrolling to the bare number could land on the section instead.
+                                .id(PatchScrollTarget.rowID(line.id))
+                        }
                     }
                 } header: {
                     PatchHunkHeader(hunk: hunk, size: codeSize)
@@ -119,7 +124,10 @@ public struct PatchView: View {
             // scrolled sideways to the middle of it, gutter off screen.
             let scroll = { (target: PatchScrollTarget?) in
                 guard let target else { return }
-                withAnimation { proxy.scrollTo(PatchScrollTarget.rowID(target.lineID), anchor: UnitPoint(x: 0, y: 0.5)) }
+                // In split view a row holds two lines, so the line names its row.
+                let id = layout == .split ? model.splitRowID[target.lineID] : PatchScrollTarget.rowID(target.lineID)
+                guard let id else { return }
+                withAnimation { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.5)) }
             }
             scroller(content, parsed)
                 .onChange(of: scrollTarget) { _, target in scroll(target) }
@@ -144,7 +152,9 @@ public struct PatchView: View {
             // shorter than the screen, so a three-line diff floated mid-page. macOS does not.
             GeometryReader { geo in
                 ScrollView([.horizontal, .vertical]) {
-                    content.frame(width: max(geo.size.width, width(of: parsed)), alignment: .leading)
+                    // Split is two columns of the widest line, so the same scroll moves both.
+                    content.frame(width: max(geo.size.width, width(of: parsed) * (layout == .split ? 2 : 1)),
+                                  alignment: .leading)
                         .frame(minHeight: geo.size.height, alignment: .top)
                 }
             }
@@ -161,6 +171,41 @@ public struct PatchView: View {
         let gutter = max(28, codeSize * 2.6)
         // gutter + spacing + marker + spacing + trailing padding, then the code itself with slack.
         return gutter + 20 + advance + Double(chars + 2) * advance
+    }
+
+    private func row(_ line: DiffLine, model: PatchModel, gutter: PatchLineRow.Gutter) -> PatchLineRow {
+        PatchLineRow(line: line, language: highlightsSyntax ? model.language : .plaintext,
+                     startState: model.highlightStates[line.id] ?? HighlightState(),
+                     emphasis: model.emphasis[line.id] ?? [],
+                     size: codeSize, wrap: wrap, gutter: gutter)
+    }
+
+    /// Old on the left, new on the right, each half numbered by its own side and unmarked —
+    /// the colour says which is which. `halfWidth` is nil when wrapping, and the halves split
+    /// the width evenly instead.
+    private func splitRow(_ pair: SplitRow, model: PatchModel, halfWidth: CGFloat?) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            splitHalf(pair.left, model: model, gutter: .old, halfWidth: halfWidth)
+            Divider()
+            splitHalf(pair.right, model: model, gutter: .new, halfWidth: halfWidth)
+        }
+        // Both halves as tall as the taller, so a wrapped line on one side does not leave a
+        // short tint or filler beside it.
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func splitHalf(_ line: DiffLine?, model: PatchModel, gutter: PatchLineRow.Gutter,
+                           halfWidth: CGFloat?) -> some View {
+        Group {
+            if let line {
+                row(line, model: model, gutter: gutter)
+            } else {
+                // Opposite an unpaired insertion or deletion: a fill, never a blank hole.
+                Color.secondary.opacity(0.07)
+            }
+        }
+        .frame(minWidth: halfWidth, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func placeholder(_ title: String, _ symbol: String, _ detail: String) -> some View {
@@ -192,13 +237,17 @@ struct PatchModel: Sendable {
     let emphasis: [Int: [Range<Int>]]
     /// The highlighter state each row starts in, for rows that do not start clean.
     let highlightStates: [Int: HighlightState]
+    /// Split view's rows, one array per hunk in `parsed.hunks` order, and the row each line
+    /// sits in — a row holds two lines, so a scroll to a line goes through this.
+    let splitRows: [[SplitRow]]
+    let splitRowID: [Int: String]
 
     init(file: FileChange, hidesWhitespaceChanges: Bool = false) {
         self.file = file
         self.hidesWhitespaceChanges = hidesWhitespaceChanges
         content = Self.content(of: file, hidesWhitespaceChanges: hidesWhitespaceChanges)
         guard case .diff(let parsed) = content else {
-            language = .plaintext; emphasis = [:]; highlightStates = [:]
+            language = .plaintext; emphasis = [:]; highlightStates = [:]; splitRows = []; splitRowID = [:]
             return
         }
         // A shebang only counts on line 1, so it is only consulted when the hunk shows it.
@@ -206,6 +255,13 @@ struct PatchModel: Sendable {
         language = CodeLanguage.detect(path: file.path, firstLine: firstLine)
         emphasis = Self.emphasis(for: parsed)
         highlightStates = Self.highlightStates(for: parsed, language: language)
+        splitRows = parsed.hunks.map { hunk in DiffParser.pair(hunk).map { SplitRow(left: $0.left, right: $0.right) } }
+        var ids: [Int: String] = [:]
+        for row in splitRows.joined() {
+            if let l = row.left { ids[l.id] = row.id }
+            if let r = row.right { ids[r.id] = row.id }
+        }
+        splitRowID = ids
     }
 
     /// What the view shows for a file, without the emphasis and highlighter work — all that
@@ -285,7 +341,24 @@ struct PatchModel: Sendable {
     }
 }
 
+/// One split-view row: the old side's line and the new side's, either missing opposite an
+/// unpaired change. A context line is both.
+struct SplitRow: Identifiable, Sendable {
+    let left: DiffLine?
+    let right: DiffLine?
+    /// Named for its first line, which `pair` guarantees exists.
+    var id: String { "patch-pair-\((left ?? right)?.id ?? -1)" }
+}
+
 // MARK: - Hooks
+
+/// How `PatchView` lays a diff out. Set with `.patchLayout(_:)`; unified by default.
+public enum PatchLayout: Sendable {
+    /// One column, deletions above their additions.
+    case unified
+    /// Old on the left, new on the right, changes paired across.
+    case split
+}
 
 /// The colours `PatchView` draws with. Every default comes from `DiffTheme` and
 /// `HighlightTheme.system`; override the ones you need and pass the result to `.patchTheme(_:)`.
@@ -339,6 +412,7 @@ private struct PatchSelectionKey: EnvironmentKey { static let defaultValue: Set<
 private struct PatchLineAccessoryKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: PatchScrollTarget? = nil }
 private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
+private struct PatchLayoutKey: EnvironmentKey { static let defaultValue = PatchLayout.unified }
 
 /// What `.patchFind(_:current:)` set: the query to tint and the occurrence to tint harder.
 struct PatchFind: Equatable {
@@ -366,6 +440,10 @@ extension EnvironmentValues {
     var patchScrollTarget: PatchScrollTarget? {
         get { self[PatchScrollTargetKey.self] }
         set { self[PatchScrollTargetKey.self] = newValue }
+    }
+    var patchLayout: PatchLayout {
+        get { self[PatchLayoutKey.self] }
+        set { self[PatchLayoutKey.self] = newValue }
     }
     var patchFind: PatchFind {
         get { self[PatchFindKey.self] }
@@ -404,6 +482,13 @@ extension View {
     /// the way left, each time a new target is set. `nil` does nothing.
     public func patchScrollTarget(_ target: PatchScrollTarget?) -> some View {
         environment(\.patchScrollTarget, target)
+    }
+
+    /// Lays every `PatchView` inside this view out unified (the default) or split. Split pairs
+    /// each deletion with the addition that replaced it, in order, and needs the width: a host
+    /// on a phone should not offer it. Every other hook works the same in both.
+    public func patchLayout(_ layout: PatchLayout) -> some View {
+        environment(\.patchLayout, layout)
     }
 
     /// Tints every case-insensitive occurrence of `query` in the code, and `current` — one of
@@ -448,6 +533,12 @@ private struct PatchLineRow: View {
     let emphasis: [Range<Int>]
     let size: Double
     let wrap: Bool
+    let gutter: Gutter
+
+    /// Which line number the gutter shows: unified shows the new file's, falling back to the
+    /// old, and no more — on a phone the numbers are orientation, not something you read.
+    /// Each split half shows its own side's, with no marker beside it.
+    enum Gutter { case unified, old, new }
 
     @Environment(\.patchTheme) private var theme
     @Environment(\.patchLineTap) private var onTap
@@ -467,9 +558,7 @@ private struct PatchLineRow: View {
 
     private var row: some View {
         HStack(alignment: .top, spacing: 6) {
-            // One column (the new file's, falling back to the old): on a phone the line
-            // numbers are orientation, not something you read.
-            Text(gutter)
+            Text(gutterText)
                 .font(.system(size: size - 2, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: max(28, size * 2.6), alignment: .trailing)
@@ -477,10 +566,12 @@ private struct PatchLineRow: View {
             // fixedSize, or the widest row in the file loses its marker: the HStack hands the
             // leftover width to its flexible children, and on the row that fills the whole
             // scrollable width there is none left, so the +/- is squeezed to nothing.
-            Text(marker)
-                .font(.system(size: size, design: .monospaced))
-                .foregroundStyle(markerColor)
-                .fixedSize()
+            if gutter == .unified {
+                Text(marker)
+                    .font(.system(size: size, design: .monospaced))
+                    .foregroundStyle(markerColor)
+                    .fixedSize()
+            }
 
             // Only the code is selectable, so a copy never drags along gutters or markers.
             Text(highlighted)
@@ -493,15 +584,22 @@ private struct PatchLineRow: View {
         }
         .padding(.vertical, 1)
         .padding(.trailing, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // maxHeight before the tint: in a split row the half beside a wrapped line is stretched
+        // to its height, and a tint applied first stopped at this line's own height. In a
+        // single column nothing proposes a height, so a row stays its natural size.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(background)
         .overlay { if selection.contains(line.id) { theme.selection.allowsHitTesting(false) } }
     }
 
-    private var gutter: String {
-        if let n = line.newLineNumber { return String(n) }
-        if let n = line.oldLineNumber { return String(n) }
-        return ""
+    private var gutterText: String {
+        let number: Int?
+        switch gutter {
+        case .unified: number = line.newLineNumber ?? line.oldLineNumber
+        case .old: number = line.oldLineNumber
+        case .new: number = line.newLineNumber
+        }
+        return number.map(String.init) ?? ""
     }
 
     private var marker: String {
@@ -643,6 +741,26 @@ extension PatchView {
         if case .whitespaceOnly = reindented.content {} else {
             assert(false, "only whitespace changed, so nothing is left to show")
         }
+
+        // Split rows pair each deletion with its replacement and pad the longer side; every
+        // line, including a context line that sits on both sides, maps to the row it is in.
+        let split = PatchModel(file: file("@@ -1,3 +1,4 @@\n ctx\n-old\n+new\n+more\n tail"))
+        guard case .diff(let sp) = split.content else { return assert(false) }
+        let sl = sp.hunks[0].lines
+        let rows = split.splitRows[0]
+        assert(rows.map { [$0.left?.text, $0.right?.text] }
+               == [["ctx", "ctx"], ["old", "new"], [nil, "more"], ["tail", "tail"]], "\(rows)")
+        assert(Set(rows.map(\.id)).count == rows.count, "row ids are unique")
+        assert(split.splitRowID[sl[1].id] == rows[1].id && split.splitRowID[sl[2].id] == rows[1].id,
+               "both halves of a pair scroll to the same row")
+        assert(split.splitRowID[sl[3].id] == rows[2].id, "an unpaired addition has its own row")
+        assert(sl.allSatisfy { split.splitRowID[$0.id] != nil }, "every line is in some row")
+        assert(split.splitRows.count == sp.hunks.count, "one array per hunk")
+        assert(PatchModel(file: file(nil)).splitRows.isEmpty)
+        // Rows with nothing on the right — deletions with no replacement — still get ids of
+        // their own: named for the right side alone, they would all collide.
+        let shrunk = PatchModel(file: file("@@ -1,3 +1,1 @@\n-a\n-b\n-c\n+d")).splitRows[0]
+        assert(shrunk.count == 3 && Set(shrunk.map(\.id)).count == 3, "\(shrunk.map(\.id))")
 
         // Asking for the same row twice is two requests, so the second still scrolls.
         assert(PatchScrollTarget(lineID: 7) != PatchScrollTarget(lineID: 7))

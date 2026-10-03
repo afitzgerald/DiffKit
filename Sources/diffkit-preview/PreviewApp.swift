@@ -76,6 +76,7 @@ struct PreviewRoot: View {
     @State private var selected: FileChange.ID?
     @State private var codeSize = 12.0
     @State private var wrap = false
+    @State private var split = false
     @State private var customTheme = false
     @State private var selectedLines: Set<Int> = []
     @State private var lastTap = "Tap a row to select it"
@@ -99,6 +100,7 @@ struct PreviewRoot: View {
                     .id(file.id)
                     .patchTheme(customTheme ? Self.contrast : PatchTheme())
                     .patchSelection(selectedLines)
+                    .patchLayout(split ? .split : .unified)
                     .onPatchLineTap { line in
                         if selectedLines.remove(line.id) == nil { selectedLines.insert(line.id) }
                         lastTap = "Tapped line \(line.newLine ?? line.oldLine ?? 0) (\(line.kind.rawValue)): \(line.text)"
@@ -124,6 +126,7 @@ struct PreviewRoot: View {
         .toolbar {
             Stepper("Code size \(Int(codeSize))", value: $codeSize, in: 8...20)
             Toggle("Wrap", isOn: $wrap)
+            Toggle("Split", isOn: $split)
             Toggle("Custom theme", isOn: $customTheme)
         }
         .onChange(of: selected) { selectedLines = [] }
@@ -158,6 +161,12 @@ struct PreviewRoot: View {
             customTheme = true
             selectedLines = Set(DiffParser.parse(code.patch ?? "").hunks.first?.lines.dropFirst(2).prefix(3).map(\.id) ?? [])
             await capture(dir.appendingPathComponent("hooks.png"))
+            // And split, with the same selection, so the hooks are seen working in both layouts.
+            // Wrapped: unwrapped, each half is as wide as the longest line, and this file's
+            // longest pushes the right half off screen.
+            split = true
+            wrap = true
+            await capture(dir.appendingPathComponent("split.png"))
         }
         NSApp.terminate(nil)
     }

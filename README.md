@@ -80,6 +80,11 @@ Git and rendering:
   - `.patchScrollTarget(PatchScrollTarget(lineID:))`: brings that row into view, centred
     and scrolled fully left. Each target is a new request, so the same row can be asked for
     twice. A target set before the rows have loaded is scrolled to once they have.
+  - `.patchLayout(.split)`: old on the left, new on the right, each deletion paired with the
+    addition that replaced it and the shorter side filled. Each half shows its own side's line
+    numbers. Unified (`.unified`) is the default. Every other hook works the same in both, and a
+    scroll target finds a line's row in either. Unwrapped, each half is as wide as the longest
+    line, so the pair scrolls sideways together; it needs a wide window, not a phone.
   - `.patchFind(query, current: match)`: tints every occurrence of `query`, and `current` (one
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
@@ -162,7 +167,6 @@ uploads light and dark harness snapshots as an artifact. When it passes on `main
 
 ## Notes
 
-- Unified view only. There's no split view, although `DiffParser.pair(_:)` gives you the rows for one.
 - `PatchView` shows a deleted file's diff straight away. If you want a "tap to load"
   step for deletions, the host adds it.
 - `\ No newline at end of file` markers are drawn as plain text.
