@@ -144,7 +144,8 @@ version instead. `--snapshot` can't capture glass, so check glass by eye.
 `.github/workflows/ci.yml` runs on every push to `main` and on every pull request. It
 builds with warnings as errors, runs the self-check, checks that a release self-check
 refuses to run, and builds the library and the harness for the iOS Simulator. It also
-uploads light and dark harness snapshots as an artifact.
+uploads light and dark harness snapshots as an artifact. When it passes on `main`,
+`.github/workflows/deploy.yml` tags the release (see [Releases](#releases)).
 
 ## Notes
 
@@ -162,10 +163,12 @@ uploads light and dark harness snapshots as an artifact.
 
 ## Releases
 
-Tags are `major.minor.patch`. Most releases are point releases (`0.2.1`): fixes and internal
-changes that leave the public API and layout alone. Bump the minor (`0.3.0`) when public API
-is added or changed, or a view lays out differently. Depend on it with
-`.upToNextMinor(from:)` to pick up point releases without a pin bump.
+Tags are `major.minor.patch`, with no `v`. Every merge to `main` is tagged as the next point
+release (`0.3.2`) once CI passes on it: `.github/workflows/deploy.yml` runs
+`scripts/next_version.sh`. Additive API ships that way too. A minor or major bump is a
+deliberate call — for a breaking change, or a view that lays out differently — made by pushing
+that tag yourself; the next merge counts from it. Depend on it with `.upToNextMinor(from:)` to
+pick up point releases without a pin bump.
 
 ## License
 
