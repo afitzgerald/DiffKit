@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build (warnings are errors)
         run: swift build -Xswiftc -warnings-as-errors
@@ -38,7 +38,7 @@ jobs:
           swift run diffkit-preview --snapshot snapshots/light --light
           swift run diffkit-preview --snapshot snapshots/dark --dark
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: snapshots
           path: snapshots/
