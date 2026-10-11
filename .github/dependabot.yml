@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs, so a moved tag can't change what CI runs.
+  # cooldown keeps Dependabot from proposing a release until it is 72h old.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
