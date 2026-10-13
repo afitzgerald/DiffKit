@@ -543,9 +543,11 @@ extension View {
         environment(\.patchSelection, lineIDs)
     }
 
-    /// Drawn at the end of every diff row, after the code — a comment count, a marker for
-    /// something the host has queued. Return `EmptyView()` for rows that carry nothing. It is
-    /// kept to its natural size, so it never takes width from the code.
+    /// Drawn at the end of every diff row — a comment count, a marker for something the host
+    /// has queued. Return `EmptyView()` for rows that carry nothing. It is kept to its natural
+    /// size. Wrapped, it sits after the code and never takes width from it. Unwrapped, it is
+    /// overlaid at the visible right edge, over the code of a line that runs past it, so give
+    /// it a background if it must read over text.
     public func patchLineAccessory<Accessory: View>(
         @ViewBuilder _ accessory: @escaping (DiffLine) -> Accessory
     ) -> some View {
@@ -575,7 +577,7 @@ extension View {
         environment(\.patchLineNumbers, numbers)
     }
 
-    /// Overlaid at the trailing edge of a row while the pointer is over it — a + that starts a
+    /// Overlaid at the visible right edge of a row while the pointer is over it — a + that starts a
     /// comment, say. Pointer only: nothing hovers on a touch screen, so a phone never shows it.
     /// In split view it is drawn once per line, on the half where `commentAnchor` composes.
     public func patchLineHover<Hover: View>(@ViewBuilder _ hover: @escaping (DiffLine) -> Hover) -> some View {
@@ -664,22 +666,51 @@ private struct PatchLineRow: View {
         }
     }
 
-    /// Tracks the pointer only when there is something to show: an idle `onHover` on every
-    /// row of a long diff is a tracking area each, for nothing.
-    private struct HoverChrome: ViewModifier {
-        let line: DiffLine
-        let hover: ((DiffLine) -> AnyView)?
+    /// The hover view, and the accessory of an unwrapped row, overlaid at the *visible* right
+    /// edge. An unwrapped row is as wide as the file's longest line, so its own trailing edge
+    /// is off screen whenever that line is wider than the view — which is where the + and the
+    /// thread count used to be drawn. `inset` changes only on a sideways scroll.
+    ///
+    /// The pointer is tracked outside the overlay, so moving onto the + keeps the row hovered.
+    /// Inside it, the + took the pointer from the row: exit, the + went, entry, the + came
+    /// back — a + that blinked under the pointer. Tracked only when there is a hover view: an
+    /// idle `onHover` on every row of a long diff is a tracking area each, for nothing.
+    private struct TrailingChrome: ViewModifier {
+        let accessory: AnyView?
+        let hover: AnyView?
         @Binding var hovering: Bool
+        @State private var inset: CGFloat = 0
 
         func body(content: Content) -> some View {
-            if let hover {
+            if accessory == nil && hover == nil {
                 content
-                    .onHover { hovering = $0 }
-                    .overlay(alignment: .trailing) { if hovering { hover(line).padding(.trailing, 6) } }
+            } else if hover != nil {
+                pinned(content).onHover { hovering = $0 }
             } else {
-                content
+                pinned(content)
             }
         }
+
+        private func pinned(_ content: Content) -> some View {
+            content
+                .overlay(alignment: .trailing) {
+                    HStack(spacing: 4) {
+                        accessory?.fixedSize()
+                        if hovering, let hover { hover }
+                    }
+                    .padding(.trailing, 6 + inset)
+                }
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    PatchLineRow.overhang(width: proxy.size.width,
+                                          visibleMaxX: proxy.bounds(of: .scrollView)?.maxX)
+                } action: { inset = $0 }
+        }
+    }
+
+    /// How far a row runs past the scroll view's visible right edge, in the row's own
+    /// coordinates. Zero when the edge is beyond the row or there is no scroll view.
+    static func overhang(width: CGFloat, visibleMaxX: CGFloat?) -> CGFloat {
+        max(0, width - (visibleMaxX ?? width))
     }
 
     /// A split context row is the same line on both halves; its accessory and hover view — a
@@ -736,7 +767,9 @@ private struct PatchLineRow: View {
                 .fixedSize(horizontal: !wrap, vertical: wrap)
                 .textSelection(.enabled)
 
-            if let accessory { accessory(line).fixedSize() }
+            // Wrapped, the code fills the visible width and this lands at its right edge.
+            // Unwrapped it would land after the line's end, so `TrailingChrome` draws it.
+            if wrap, let accessory { accessory(line).fixedSize() }
         }
         .padding(.vertical, 1)
         .padding(.trailing, 8)
@@ -746,7 +779,8 @@ private struct PatchLineRow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(background)
         .overlay { if selection.contains(line.id) { theme.selection.allowsHitTesting(false) } }
-        .modifier(HoverChrome(line: line, hover: hover, hovering: $hovering))
+        .modifier(TrailingChrome(accessory: wrap ? nil : accessory?(line), hover: hover?(line),
+                                 hovering: $hovering))
     }
 
     /// The one number a single column shows; `.both` draws its own pair.
@@ -926,6 +960,13 @@ extension PatchView {
         assert(PatchLineRow.ownsLineChrome(ctx, gutter: .new))
         assert(PatchLineRow.ownsLineChrome(del, gutter: .old))
         assert(PatchLineRow.ownsLineChrome(ctx, gutter: .unified))
+
+        // A 2000-point row in a 400-point view: the chrome sits 1600 in from the row's end, so
+        // on screen. Scrolled 300 right, 1300. A row narrower than the view needs no inset.
+        assert(PatchLineRow.overhang(width: 2000, visibleMaxX: 400) == 1600, "chrome drawn past the visible edge")
+        assert(PatchLineRow.overhang(width: 2000, visibleMaxX: 700) == 1300)
+        assert(PatchLineRow.overhang(width: 300, visibleMaxX: 400) == 0)
+        assert(PatchLineRow.overhang(width: 300, visibleMaxX: nil) == 0)
 
         // Asking for the same row twice is two requests, so the second still scrolls.
         assert(PatchScrollTarget(lineID: 7) != PatchScrollTarget(lineID: 7))
