@@ -10,6 +10,7 @@
         SyntaxHighlighter.demo()
         PatchView.demo()
         PatchImagePreview.demo()
+        MarkdownView.demo()
         PatchFileStepper.demo()
     }
 }

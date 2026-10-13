@@ -103,9 +103,9 @@ public struct PatchMarkdownPreview<Rendered: View>: View {
     let headRef: String
     let render: (String) -> Rendered
 
-    /// `render` draws one side's whole document. DiffKit has no markdown renderer of its own:
-    /// the host already has one for comments and descriptions, and a preview drawn by a second,
-    /// different renderer would not look like the rest of the app.
+    /// `render` draws one side's whole document. Without one it is `MarkdownView`; pass your
+    /// own if the host renders markdown elsewhere with something else, so the preview looks
+    /// like the rest of the app.
     public init(file: FileChange, before: String?, after: String?, baseRef: String, headRef: String,
                 @ViewBuilder render: @escaping (String) -> Rendered) {
         self.file = file
@@ -142,6 +142,15 @@ public struct PatchMarkdownPreview<Rendered: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
+        }
+    }
+}
+
+extension PatchMarkdownPreview where Rendered == MarkdownView {
+    /// Both sides drawn by `MarkdownView`.
+    public init(file: FileChange, before: String?, after: String?, baseRef: String, headRef: String) {
+        self.init(file: file, before: before, after: after, baseRef: baseRef, headRef: headRef) {
+            MarkdownView($0)
         }
     }
 }

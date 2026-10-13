@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The diagram source is anyone's text. No network, no plugins; only the bundled script. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  svg { display: block; }
+</style>
+<script src="mermaid.min.js"></script>
+<script>
+  let count = 0;
+  // Called by MermaidView with the diagram source. Returns the SVG's natural size, which the
+  // view turns into an aspect ratio, so the page never has to report a height on resize.
+  async function draw(source, dark) {
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+    const { svg } = await mermaid.render('diagram' + (++count), source);
+    document.body.innerHTML = svg;
+    const box = document.querySelector('svg').viewBox.baseVal;
+    return [box.width, box.height];
+  }
+</script>
+</head>
+<body></body>
+</html>

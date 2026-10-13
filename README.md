@@ -5,8 +5,9 @@ rough edges, missing features (see [Notes](#notes)), and breaking changes betwee
 without notice.
 
 A Swift package for git diffs. It parses unified diffs, splits raw `git diff` output into
-files, and renders one file with `PatchView`. It uses SwiftUI only, has no dependencies, and
-targets macOS 14 and iOS 18.
+files, and renders one file with `PatchView`. It also renders markdown, Mermaid diagrams
+included. It uses SwiftUI only, has no package dependencies, and targets macOS 14 and iOS 18.
+The one third-party file is a bundled copy of mermaid.js (see [Markdown](#markdown)).
 
 ```swift
 .package(url: "https://github.com/afitzgerald/DiffKit.git", from: "0.1.0")
@@ -109,8 +110,10 @@ Git and rendering:
   - `PatchImagePreview(file:before:after:baseRef:headRef:)`: both images over a transparency
     checkerboard, with pixel size and file size. `PatchImagePreview.isImage(path:)` names the
     formats (SVG is text and diffs as code).
-  - `PatchMarkdownPreview(file:before:after:baseRef:headRef:) { text in … }`: both documents,
-    scrolling together, drawn by the host's own markdown renderer.
+  - `PatchMarkdownPreview(file:before:after:baseRef:headRef:)`: both documents, scrolling
+    together, drawn by `MarkdownView`. Add `{ text in … }` to draw them with the host's own
+    renderer instead.
+- `MarkdownView(text)`: see [Markdown](#markdown).
 - `PatchFileStepper(files:selection:)`: an optional previous/next capsule (Liquid Glass on
   iOS/macOS 26+) to overlay on a `PatchView`, e.g. `.overlay(alignment: .bottomLeading)`.
   It steps `files` in the order given, so pass your list's order. ⌘[ and ⌘] step too.
@@ -120,6 +123,29 @@ Git and rendering:
   - `.onPatchFilesEnd { … }`: on the last file (with `viewed:`, when no other file is
     unviewed), "next" becomes a checkmark that calls this, e.g. to close the diff. Without
     it, "next" is disabled there.
+
+## Markdown
+
+`MarkdownView(text)` draws markdown good enough for PR bodies, comments and READMEs:
+headings, nested lists, task lists, tables, quotes, fenced code, images, GitHub video
+attachments, and `<details>` blocks. It is not a CommonMark renderer. It skips reference
+links, strips inline HTML, and draws anything it doesn't recognise as prose.
+
+- Images load with `AsyncImage`, and a video is a link. If your media needs credentials (a
+  private repo's attachments return 404 without them), draw it yourself:
+  `.markdownMedia { media in … }`, where `media` is `.image(alt:url:)` or `.video(url)`.
+- A task box ticks in `PatchTheme.added`.
+- A ```` ```mermaid ```` block is drawn as a diagram by mermaid.js 11.12.1 (MIT,
+  `Sources/DiffKit/Resources/`). Each diagram gets its own small `WKWebView`. Mermaid runs
+  with `securityLevel: 'strict'`, and the page loads nothing but the bundled script and
+  navigates nowhere. The diagram follows light and dark mode, scales down to fit, and never
+  scales past its natural size. A diagram that doesn't parse falls back to its source as a
+  code block.
+- The script ships in SwiftPM's resource bundle, `DiffKit_DiffKit.bundle`. Xcode copies it
+  into an app. An app assembled by hand from `swift build` output must copy it too: into
+  `Contents/Resources/` on macOS, or the app's root on iOS. Without it, every Mermaid block
+  falls back to code. Nothing crashes.
+- 11.x rather than 12.x: 12.2.0's `mermaid.min.js` is 5.5 MB, twice the size of 11.12.1.
 
 ## Self-check
 
