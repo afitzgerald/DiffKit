@@ -12,6 +12,8 @@ import AppKit
 //   swift run diffkit-preview --snapshot DIR     write DIR/<n>-<file>.png for each file, then quit
 //   add --light or --dark to override the system appearance
 //
+// A piped or saved diff reads each file's new text from the current directory, so its unchanged
+// lines can be expanded: run it where the diff was taken.
 // Tap a row to toggle its selection, which exercises `.onPatchLineTap` and `.patchSelection`.
 
 @main
@@ -39,6 +41,8 @@ struct Options {
     var files: [FileChange]
     var snapshotDir: URL?
     var scheme: ColorScheme?
+    /// The new side's full text by path, for `.patchFileText`. nil reads the file from disk.
+    var texts: [String: String]?
 
     static let current: Options = {
         var args = Array(CommandLine.arguments.dropFirst())
@@ -64,6 +68,14 @@ struct Options {
             options.files.append(FileChange(
                 path: "zz/generated.swift", status: .added, additions: lines, deletions: 0,
                 patch: "@@ -0,0 +1,\(lines) @@\n" + (1...lines).map { "+let v\($0) = \($0)" }.joined(separator: "\n")))
+            // Two hunks far apart in a long file, with its new text, so every gap can expand.
+            let body = (1...80).map { "    let v\($0) = \($0)" }
+            let old = (["/* Values,", "   one per line. */", "struct Values {"] + body + ["}"]).joined(separator: "\n") + "\n"
+            let new = old.replacingOccurrences(of: "v10 = 10", with: "v10 = 100")
+                .replacingOccurrences(of: "    let v50 = 50\n", with: "    let v50 = 50\n    let v50b = 51\n")
+            options.files.append(FileChange(path: "zz/expandable.swift", status: .modified, additions: 2,
+                                            deletions: 1, patch: DiffParser.unifiedPatch(from: old, to: new)))
+            options.texts = ["zz/expandable.swift": new]
         }
         return options
     }()
@@ -105,6 +117,10 @@ struct PreviewRoot: View {
                     .patchLayout(split ? .split : .unified)
                     .patchLineTapTarget(gutterTaps ? .gutter : .row)
                     .patchLineNumbers(bothNumbers ? .both : .one)
+                    .patchFileText { file in
+                        if let texts = Options.current.texts { return texts[file.path] }
+                        return try? String(contentsOfFile: file.path, encoding: .utf8)
+                    }
                     // macOS: a + at the end of the row under the pointer, as a host's comment button.
                     .patchLineHover { line in
                         Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)

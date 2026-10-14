@@ -32,6 +32,13 @@ public struct PatchView: View {
     /// The visible width, which attachments are held to: in an unwrapped diff the column is as
     /// wide as the longest line, and a thread laid across it ran off screen to the right.
     @State private var viewportWidth: CGFloat = 0
+    @Environment(\.patchFileText) private var fileText
+    /// The unchanged lines around the hunks, once the host's text has arrived and matched.
+    @State private var expansion: PatchExpansion?
+    /// How much of each gap is showing, keyed by its index in `PatchExpansion.gaps`.
+    @State private var revealed: [Int: GapReveal] = [:]
+    /// Kept so that flipping hidden whitespace does not fetch the file again.
+    @State private var loadedText: (file: FileChange, text: String)?
 
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false) {
         self.init(file: file, codeSize: codeSize, wrap: wrap,
@@ -87,10 +94,35 @@ public struct PatchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: ModelKey(file: file, hidesWhitespaceChanges: hidesWhitespaceChanges)) {
             let file = file, hides = hidesWhitespaceChanges
-            model = await Task.detached(priority: .userInitiated) {
+            let built = await Task.detached(priority: .userInitiated) {
                 PatchModel(file: file, hidesWhitespaceChanges: hides)
             }.value
+            model = built
+            expansion = nil
+            revealed = [:]
+            guard PatchExpansion.expandable(built) != nil, let text = await text(of: file),
+                  !Task.isCancelled else { return }
+            let expanded = await Task.detached(priority: .userInitiated) {
+                PatchExpansion(model: built, text: text)
+            }.value
+            if !Task.isCancelled { expansion = expanded }
         }
+    }
+
+    /// The host's full new text for `file`, from `.patchFileText`, fetched once per file.
+    private func text(of file: FileChange) async -> String? {
+        guard let fileText else { return nil }
+        if let loadedText, loadedText.file == file { return loadedText.text }
+        let text = await fileText(file)
+        if let text { loadedText = (file, text) }
+        return text
+    }
+
+    /// The expansion for what is on screen now, never a previous file's.
+    private var currentExpansion: PatchExpansion? {
+        guard let expansion, expansion.file == file,
+              expansion.hidesWhitespaceChanges == hidesWhitespaceChanges else { return nil }
+        return expansion
     }
 
     @ViewBuilder
@@ -100,28 +132,22 @@ public struct PatchView: View {
         // a per-row ScrollView unreadable.
         let content = LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(Array(parsed.hunks.enumerated()), id: \.element.id) { index, hunk in
+                gap(index, model: model, parsed: parsed)
                 Section {
                     if layout == .split {
                         ForEach(model.splitRows[index]) { pair in
-                            withAttachments([pair.left, pair.right].compactMap { $0 }.threadAnchors) {
-                                splitRow(pair, model: model, halfWidth: wrap ? nil : width(of: parsed))
-                            }
-                            .id(pair.id)
+                            pairRow(pair, model: model, parsed: parsed)
                         }
                     } else {
                         ForEach(hunk.lines) { line in
-                            withAttachments(line.threadAnchors) {
-                                row(line, model: model, gutter: lineNumbers == .both ? .both : .unified)
-                            }
-                                // A string id of its own: `Hunk.id` is its first line's id, so
-                                // scrolling to the bare number could land on the section instead.
-                                .id(PatchScrollTarget.rowID(line.id))
+                            unifiedRow(line, model: model)
                         }
                     }
                 } header: {
                     PatchHunkHeader(hunk: hunk, size: codeSize)
                 }
             }
+            gap(parsed.hunks.count, model: model, parsed: parsed)
             if parsed.isTruncated {
                 Label("This diff was cut short after \(DiffParser.maxLines) lines.", systemImage: "scissors")
                     .font(.footnote)
@@ -173,12 +199,58 @@ public struct PatchView: View {
         }
     }
 
+    private func unifiedRow(_ line: DiffLine, model: PatchModel) -> some View {
+        withAttachments(line.threadAnchors) {
+            row(line, model: model, gutter: lineNumbers == .both ? .both : .unified)
+        }
+            // A string id of its own: `Hunk.id` is its first line's id, so
+            // scrolling to the bare number could land on the section instead.
+            .id(PatchScrollTarget.rowID(line.id))
+    }
+
+    private func pairRow(_ pair: SplitRow, model: PatchModel, parsed: ParsedDiff) -> some View {
+        withAttachments([pair.left, pair.right].compactMap { $0 }.threadAnchors) {
+            splitRow(pair, model: model, halfWidth: wrap ? nil : width(of: parsed))
+        }
+        .id(pair.id)
+    }
+
+    /// The unchanged lines before hunk `index` (after the last one, at `hunks.count`): what has
+    /// been revealed from each end, and between them a row that reveals more. Nothing without
+    /// an expansion, so a host that supplies no text sees the diff exactly as before.
+    @ViewBuilder
+    private func gap(_ index: Int, model: PatchModel, parsed: ParsedDiff) -> some View {
+        if let lines = currentExpansion?.gaps[index], !lines.isEmpty {
+            let shown = revealed[index] ?? GapReveal()
+            let hidden = shown.hidden(of: lines.count)
+            ForEach(lines.prefix(shown.top)) { gapLine($0, model: model, parsed: parsed) }
+            if hidden > 0 {
+                // Above the first hunk only upwards makes sense, below the last only downwards.
+                PatchGapRow(hidden: hidden, size: codeSize,
+                            edges: (index > 0 ? [.top] : []) + (index < parsed.hunks.count ? [.bottom] : [])) { edge in
+                    revealed[index, default: GapReveal()].reveal(edge, of: lines.count)
+                }
+            }
+            ForEach(lines.suffix(shown.bottom)) { gapLine($0, model: model, parsed: parsed) }
+        }
+    }
+
+    @ViewBuilder
+    private func gapLine(_ line: DiffLine, model: PatchModel, parsed: ParsedDiff) -> some View {
+        if layout == .split {
+            pairRow(SplitRow(left: line, right: line), model: model, parsed: parsed)
+        } else {
+            unifiedRow(line, model: model)
+        }
+    }
+
     /// Width of the longest line, measured in characters rather than laid out: the code is
     /// monospaced, so a character count times the advance is exact enough to scroll to.
     /// A wide glyph (CJK, an emoji in a comment) is under-counted and its line clips at the
     /// right edge; measure the real string if that ever matters.
     private func width(of parsed: ParsedDiff) -> CGFloat {
-        let chars = parsed.hunks.flatMap(\.lines).map(\.text.count).max() ?? 0
+        let chars = max(parsed.hunks.flatMap(\.lines).map(\.text.count).max() ?? 0,
+                        currentExpansion?.longestLine ?? 0)
         let advance = codeSize * 0.6
         // Two number columns only in a unified diff: each split half numbers its own side.
         let columns: CGFloat = lineNumbers == .both && layout == .unified ? 2 : 1
@@ -189,7 +261,8 @@ public struct PatchView: View {
 
     private func row(_ line: DiffLine, model: PatchModel, gutter: PatchLineRow.Gutter) -> PatchLineRow {
         PatchLineRow(line: line, language: highlightsSyntax ? model.language : .plaintext,
-                     startState: model.highlightStates[line.id] ?? HighlightState(),
+                     startState: model.highlightStates[line.id] ?? currentExpansion?.highlightStates[line.id]
+                         ?? HighlightState(),
                      emphasis: model.emphasis[line.id] ?? [],
                      size: codeSize, wrap: wrap, gutter: gutter)
     }
@@ -471,6 +544,7 @@ private struct PatchLineAttachmentKey: EnvironmentKey { static let defaultValue:
 private struct PatchLineNumbersKey: EnvironmentKey { static let defaultValue = PatchLineNumbers.one }
 private struct PatchLineHoverKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchLineTapTargetKey: EnvironmentKey { static let defaultValue = PatchLineTapTarget.row }
+private struct PatchFileTextKey: EnvironmentKey { static let defaultValue: ((FileChange) async -> String?)? = nil }
 
 /// What `.patchFind(_:current:)` set: the query to tint and the occurrence to tint harder.
 struct PatchFind: Equatable {
@@ -522,6 +596,10 @@ extension EnvironmentValues {
     var patchFind: PatchFind {
         get { self[PatchFindKey.self] }
         set { self[PatchFindKey.self] = newValue }
+    }
+    var patchFileText: ((FileChange) async -> String?)? {
+        get { self[PatchFileTextKey.self] }
+        set { self[PatchFileTextKey.self] = newValue }
     }
 }
 
@@ -603,6 +681,16 @@ extension View {
     public func patchFind(_ query: String, current: DiffFind.Match? = nil) -> some View {
         environment(\.patchFind, PatchFind(query: query, current: current))
     }
+
+    /// The file's full text on the diff's new side, so the reader can reveal the unchanged lines
+    /// between hunks, and above the first and below the last. Called once per file `PatchView`
+    /// shows, never for a new, deleted or binary file; return nil when there is no text. The
+    /// revealed lines are context rows with both numbers and id `-newLine`, outside
+    /// `DiffFind.matches`. A text that does not hold the patch's lines at its headers' numbers
+    /// (the file changed since the diff was taken) offers no expansion at all.
+    public func patchFileText(_ text: @escaping (FileChange) async -> String?) -> some View {
+        environment(\.patchFileText, text)
+    }
 }
 
 // MARK: - Rows
@@ -628,6 +716,42 @@ private struct PatchHunkHeader: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
+    }
+}
+
+/// Between hunks: how many unchanged lines are hidden, and buttons to reveal them. `edges` are
+/// the ends of the gap a step can reveal from: `.top` continues down from the hunk above,
+/// `.bottom` up from the hunk below. A gap of one step or less only offers all of it.
+private struct PatchGapRow: View {
+    let hidden: Int
+    let size: Double
+    let edges: [VerticalEdge]
+    let reveal: (VerticalEdge?) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if hidden > GapReveal.step {
+                ForEach(edges, id: \.self) { edge in
+                    Button { reveal(edge) } label: {
+                        Image(systemName: edge == .top ? "arrow.down" : "arrow.up")
+                    }
+                    .help(edge == .top ? "Show \(GapReveal.step) more lines below" : "Show \(GapReveal.step) more lines above")
+                    .accessibilityLabel(edge == .top ? "Show \(GapReveal.step) more lines below"
+                                                     : "Show \(GapReveal.step) more lines above")
+                }
+            }
+            Button { reveal(nil) } label: {
+                Label(hidden == 1 ? "Show 1 unchanged line" : "Show \(hidden) unchanged lines",
+                      systemImage: "arrow.up.and.down")
+            }
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: size - 1))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08))
     }
 }
 
