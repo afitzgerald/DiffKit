@@ -103,6 +103,16 @@ Git and rendering:
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
     `PatchTheme.findMatch` and `.findCurrent`.
+  - `.patchFileText { file in … }`: the file's full text on the diff's new side, async, so the
+    reader can reveal the unchanged lines between hunks, above the first and below the last, 20
+    at a time or all at once. Unchanged lines are the same on both sides, so the new text is
+    enough, and each revealed line gets its old and new number. It is called once per file shown,
+    never for a new, deleted or binary file; return nil when there is no text. Before offering
+    anything, `PatchView` checks that every context and added line sits at its header's number in
+    the text. If one doesn't (the file changed since the diff was taken), there is nothing to
+    expand, rather than the wrong lines. Revealed rows are context lines with id `-newLine`, so
+    taps, selection, accessories and find tinting work on them, but `DiffFind.matches` lists
+    only the patch's own rows. Without the hook, nothing changes.
 - Before/after previews for files whose patch is not the thing to read. Neither fetches: the
   host reads both revisions whole and passes them in, `nil` for a side that is not there, and
   the file's status says why (an added file has no "before"). Side by side when there is room,
@@ -178,7 +188,9 @@ warnings, and CI builds with `-warnings-as-errors`.
 `diffkit-preview` is a local app for looking at `PatchView`. It shows a file list and the
 selected file's diff, with controls for code size, wrapping and a high-contrast theme.
 Tapping a row toggles its selection, which exercises the hooks. With no arguments it loads a
-built-in sample: real `git diff` output that covers every placeholder and edge case above.
+built-in sample: real `git diff` output that covers every placeholder and edge case above, plus
+`zz/expandable.swift`, whose gaps expand. A piped or saved diff reads each file's new text from
+the current directory for `.patchFileText`, so run it where the diff was taken.
 
 ```sh
 swift run diffkit-preview                          # the built-in sample
@@ -212,7 +224,8 @@ uploads light and dark harness snapshots as an artifact. When it passes on `main
 - Hunk headers show git's own numbers (`+0,0`). `Hunk.rangeHeader` rebuilds them from the
   parsed starts, which turns an empty side into `+1,0`.
 - Syntax state starts clean at each hunk, so a comment opened above a hunk's first line is
-  still coloured as code. The patch doesn't contain what comes before the hunk.
+  still coloured as code. The patch doesn't contain what comes before the hunk. Revealed
+  unchanged lines are coloured from the whole new file, so they don't have this problem.
 - The line-number gutter has one column: the new file's number, falling back to the old.
 - The `files(fromGitDiff:)` check is `DiffParser.gitDiffDemo()` rather than `demo()`,
   because `DiffParser.demo()` checks the parser.
