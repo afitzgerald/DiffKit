@@ -16,20 +16,28 @@ struct MermaidView: View {
     @State private var failed = false
 
     var body: some View {
-        if failed || Mermaid.page == nil {
-            MarkdownCode(text: source)
-        } else {
-            MermaidWebView(source: source, dark: scheme == .dark) { result in
-                switch result {
-                case .some(let drawn): size = drawn
-                case .none: failed = true
+        Group {
+            if failed || Mermaid.page == nil {
+                MarkdownCode(text: source)
+            } else {
+                MermaidWebView(source: source, dark: scheme == .dark) { result in
+                    switch result {
+                    case .some(let drawn): size = drawn
+                    case .none: failed = true
+                    }
                 }
+                // Scales down to the pane, never up past its natural size. The 4:1 is only the
+                // placeholder while mermaid.js draws.
+                .aspectRatio(size.map { $0.width / $0.height } ?? 4, contentMode: .fit)
+                .frame(maxWidth: size?.width ?? .infinity)
+                .accessibilityLabel("Diagram")
             }
-            // Scales down to the pane, never up past its natural size. The 4:1 is only the
-            // placeholder while mermaid.js draws.
-            .aspectRatio(size.map { $0.width / $0.height } ?? 4, contentMode: .fit)
-            .frame(maxWidth: size?.width ?? .infinity)
-            .accessibilityLabel("Diagram")
+        }
+        // Both describe the old source: a fixed diagram would otherwise stay code, and a changed
+        // one keep the old shape until it redraws. The web view stays, and redraws.
+        .onChange(of: source) {
+            failed = false
+            size = nil
         }
     }
 }

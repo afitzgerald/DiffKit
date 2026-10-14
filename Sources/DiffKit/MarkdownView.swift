@@ -91,10 +91,10 @@ public struct MarkdownView: View {
         case .rule:
             Divider()
         case .image(let alt, let url):
-            if let media { media(.image(alt: alt, url: url)) } else { DefaultImage(url: url, alt: alt) }
+            if let media { media.draw(.image(alt: alt, url: url)) } else { DefaultImage(url: url, alt: alt) }
         case .video(let url):
             if let media {
-                media(.video(url))
+                media.draw(.video(url))
             } else {
                 Link(destination: url) { Label("Video", systemImage: "play.rectangle") }.font(.callout)
             }
@@ -422,12 +422,31 @@ public enum MarkdownMedia: Equatable, Sendable {
     case video(URL)
 }
 
-private struct MarkdownMediaKey: EnvironmentKey { static let defaultValue: ((MarkdownMedia) -> AnyView)? = nil }
+/// `.markdownMedia`'s closure, equal by the modifier that set it. SwiftUI cannot compare a bare
+/// closure, so it counted as changed on every environment pass and re-ran every `MarkdownView`
+/// body under it, though the host had set it once.
+struct MarkdownMediaDrawer: Equatable {
+    let id: UUID
+    let draw: (MarkdownMedia) -> AnyView
+
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id }
+}
+
+private struct MarkdownMediaKey: EnvironmentKey { static let defaultValue: MarkdownMediaDrawer? = nil }
 
 extension EnvironmentValues {
-    var markdownMedia: ((MarkdownMedia) -> AnyView)? {
+    var markdownMedia: MarkdownMediaDrawer? {
         get { self[MarkdownMediaKey.self] }
         set { self[MarkdownMediaKey.self] = newValue }
+    }
+}
+
+private struct MarkdownMediaModifier<Media: View>: ViewModifier {
+    let draw: (MarkdownMedia) -> Media
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content.environment(\.markdownMedia, MarkdownMediaDrawer(id: id) { AnyView(draw($0)) })
     }
 }
 
@@ -435,8 +454,11 @@ extension View {
     /// Draws every image and video in the `MarkdownView`s inside this view, e.g. through a
     /// loader that sends credentials. Without it images load with `AsyncImage` and a video is
     /// a link.
+    ///
+    /// The closure is compared by where it is set, not by what it captures: a capture that
+    /// changes redraws media the next time a `MarkdownView` redraws, not straight away.
     public func markdownMedia<Media: View>(@ViewBuilder _ draw: @escaping (MarkdownMedia) -> Media) -> some View {
-        environment(\.markdownMedia, { AnyView(draw($0)) })
+        modifier(MarkdownMediaModifier(draw: draw))
     }
 }
 
@@ -582,5 +604,75 @@ extension MarkdownView {
         assert(stripTags(#"<strong title="t">Autofix</strong> · <code>x</code>"#)
                == "**Autofix** · `x`", "emphasis and code survive as markdown")
         assert(Self.blocks(of: "<hr>") == [.rule])
+
+        func flat(_ blocks: [Block]) -> [Block] {
+            blocks.flatMap { if case .details(_, let body) = $0 { [$0] + flat(Self.blocks(of: body)) } else { [$0] } }
+        }
+        let bot = flat(Self.blocks(of: summaryBotComment))
+        assert(!bot.contains { block in
+            let text: String
+            switch block {
+            case .prose(let s), .heading(_, let s), .quote(let s): text = s
+            case .details(let s, _): text = s
+            case .list(let items): text = items.map(\.text).joined()
+            case .table(let h, let rows): text = (h + rows.joined()).joined()
+            default: return false
+            }
+            return text.range(of: "</?[a-z]+[\\s>/]", options: .regularExpression) != nil
+        }, "no HTML tag is left visible anywhere in a summary bot's comment")
     }
+
+    /// The raw HTML a summary bot posts: a linked badge inside `<picture>`, `<details>` wrapped
+    /// in `<dl><dd>`, an inline counter image in a summary, `<strong>` and `<hr>`. Each of those
+    /// once rendered as literal tags or vanished.
+    static let summaryBotComment = """
+        <!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+
+        <a href="https://example.com/change-stack/101?a=1&amp;b=2"><picture><source media="(prefers-color-scheme: dark)" srcset="https://example.com/stack-dark.svg"><img src="https://example.com/stack.svg" alt="Review in Change Stack →" height="32"></picture></a>
+
+        <details>
+        <summary><strong>📝 Walkthrough</strong></summary>
+        <dl>
+        <dd>
+
+        ## Walkthrough
+
+        Session refresh is single-flighted, so two requests that race share one refresh.
+
+        |Layer / File(s)|Summary|
+        |:---|:---|
+        |**Refresh** <br> `session_store.rb`|One in-flight promise per store.|
+
+        **Suggested reviewers:** `dana`
+
+        <hr>
+
+        </dd>
+        </dl>
+        </details>
+
+        **Merge Risk:** **🔵 Low** · up to `9c1f2ab`
+
+        The refresh timeout moves to 15s; confirm the load balancer allows it before merging.
+
+        <details>
+        <summary><strong>Pre-merge checks | <sup><picture><img src="https://example.com/passed.svg" width="14" alt="Passed"></picture></sup> 2</strong></summary>
+        <dl>
+        <dd>
+
+        | Check name | Status | Explanation |
+        | :--- | :---: | :--- |
+        | Title check | ![Passed](https://example.com/passed.svg) | The title names the change. |
+        | Description Check | ![Passed](https://example.com/passed.svg) | Skipped. |
+
+        </dd>
+        </dl>
+        </details>
+
+        - [ ] <!-- {"checkboxId":"x"} --> <strong title="Keep fixing findings">Autofix</strong> · Keep fixing findings and required CI
+
+        ---
+
+        <sub>Comment `@coderabbitai help` to get the list of available commands.</sub>
+        """
 }
