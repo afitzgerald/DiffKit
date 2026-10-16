@@ -313,7 +313,21 @@ public enum DiffParser {
 
     /// Character ranges that actually differ between a paired deletion and addition.
     /// Common prefix/suffix are trimmed first so a one-token edit highlights one token.
+    ///
+    /// Empty when under half the two lines' non-whitespace text survives. The split view pairs
+    /// lines by position, so a rewritten block pairs unrelated lines, and emphasis on nearly
+    /// every character hides what changed. The line tint already says the line changed.
     public static func inlineRanges(deleted: String, added: String)
+        -> (del: [Range<String.Index>], add: [Range<String.Index>]) {
+        let ranges = changedRanges(deleted: deleted, added: added)
+        func visible<S: StringProtocol>(_ s: S) -> Int { s.filter { !$0.isWhitespace }.count }
+        let total = visible(deleted) + visible(added)
+        let changed = ranges.del.reduce(0) { $0 + visible(deleted[$1]) }
+            + ranges.add.reduce(0) { $0 + visible(added[$1]) }
+        return (total - changed) * 2 >= total ? ranges : ([], [])
+    }
+
+    private static func changedRanges(deleted: String, added: String)
         -> (del: [Range<String.Index>], add: [Range<String.Index>]) {
         let d = Array(deleted), a = Array(added)
         if d == a { return ([], []) }
@@ -555,6 +569,12 @@ extension DiffParser {
         assert(scattered.add.map { String("bar(a, c)"[$0]) } == ["bar", "c"], "\(scattered.add)")
 
         assert(inlineRanges(deleted: "same", added: "same") == ([], []))
+
+        // A rewritten block pairs unrelated lines by position; those get no emphasis.
+        let unrelated = inlineRanges(old: "        $first = $model->isPurchaseLinkActive($subdomain);",
+                                     new: "        RecordingEgiftifyModel::$fetched = [];")
+        assert(unrelated == ([], []), "\(unrelated)")
+        assert(inlineRanges(old: "", new: "        try {") == ([], []), "blank against code")
         let offsets = inlineRanges(old: del, new: add)
         assert(offsets.old == [8..<9] && offsets.new == [8..<9], "\(offsets)")
 

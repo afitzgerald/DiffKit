@@ -1,5 +1,7 @@
 // Real `git diff` output (git 2.55.0), captured from a scratch repo. Tabs are written as
 // \#t so an editor cannot strip the trailing ones git puts after a path with a space.
+// tests/ModelTest.php is a rewritten block whose lines pair by position with unrelated
+// ones; in split view it should show line tints and no word emphasis.
 let sampleDiff = #"""
 diff --git a/Sources/App/Download.swift b/Sources/App/Download.swift
 index bf617cf..6a0a5cf 100644
@@ -95,6 +97,37 @@ index 401281a..83f43af
  if __name__ == "__main__":
 -    sync(sys.argv[1:])
 +    sync(sys.argv[1:], dry_run="-n" in sys.argv)
+diff --git a/tests/ModelTest.php b/tests/ModelTest.php
+index 3c1d2e4..8f9a0b7 100644
+--- a/tests/ModelTest.php
++++ b/tests/ModelTest.php
+@@ -55,13 +55,19 @@ public function testPurchaseLinkIsLookedUpOncePerSubdomain(): void
+         $subdomain = uniqid('memo-', true);
+         $other = uniqid('memo-other-', true);
+         $model = new RecordingModel();
+-
+-        $first = $model->isPurchaseLinkActive($subdomain);
+-        $second = (new RecordingModel())->isPurchaseLinkActive($subdomain);
+-        $model->isPurchaseLinkActive($other);
+-
+-        $this->assertSame($first, $second);
+-        $this->assertSame([$subdomain, $other], RecordingModel::$fetched);
++        $recorded = RecordingModel::$fetched;
++        RecordingModel::$fetched = [];
++
++        try {
++            $first = $model->isPurchaseLinkActive($subdomain);
++            $second = (new RecordingModel())->isPurchaseLinkActive($subdomain);
++            $model->isPurchaseLinkActive($other);
++
++            $this->assertSame($first, $second);
++            $this->assertSame([$subdomain, $other], RecordingModel::$fetched);
++        } finally {
++            RecordingModel::$fetched = $recorded;
++        }
+     }
+
+     public function testFalseFileBodyReturnsNull(): void
 diff --cc conflicted.txt
 index af70335,f794161..0000000
 --- a/conflicted.txt
