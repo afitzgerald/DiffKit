@@ -502,7 +502,12 @@ public struct PatchTheme {
     /// Behind every occurrence of the `.patchFind(_:current:)` query, and the current one.
     /// Properties rather than `init` parameters, so the initialiser stays the 0.3.0 symbol.
     public var findMatch = Color.yellow.opacity(0.35)
-    public var findCurrent = Color.orange.opacity(0.7)
+    /// Opaque, with its own text colour: syntax colours on a strong tint (a red keyword on
+    /// orange) blur into a smudge, and the current match stops reading as the current one.
+    public var findCurrent = Color.yellow
+    public var findCurrentText = Color.black
+    /// The bar down the leading edge of the rows named in `.patchCurrentChange(_:)`.
+    public var currentChange = Color.accentColor
     public var syntax: HighlightTheme
 
     public init(added: Color = DiffTheme.added, removed: Color = DiffTheme.removed,
@@ -536,6 +541,7 @@ public struct PatchScrollTarget: Equatable, Sendable {
 private struct PatchThemeKey: EnvironmentKey { static let defaultValue = PatchTheme() }
 private struct PatchLineTapKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> Void)? = nil }
 private struct PatchSelectionKey: EnvironmentKey { static let defaultValue: Set<Int> = [] }
+private struct PatchCurrentChangeKey: EnvironmentKey { static let defaultValue: Set<Int> = [] }
 private struct PatchLineAccessoryKey: EnvironmentKey { static let defaultValue: ((DiffLine) -> AnyView)? = nil }
 private struct PatchScrollTargetKey: EnvironmentKey { static let defaultValue: PatchScrollTarget? = nil }
 private struct PatchFindKey: EnvironmentKey { static let defaultValue = PatchFind() }
@@ -564,6 +570,10 @@ extension EnvironmentValues {
     var patchSelection: Set<Int> {
         get { self[PatchSelectionKey.self] }
         set { self[PatchSelectionKey.self] = newValue }
+    }
+    var patchCurrentChange: Set<Int> {
+        get { self[PatchCurrentChangeKey.self] }
+        set { self[PatchCurrentChangeKey.self] = newValue }
     }
     var patchLineAccessory: ((DiffLine) -> AnyView)? {
         get { self[PatchLineAccessoryKey.self] }
@@ -619,6 +629,14 @@ extension View {
     /// commented line. The host owns the selection; `PatchView` only draws it.
     public func patchSelection(_ lineIDs: Set<Int>) -> some View {
         environment(\.patchSelection, lineIDs)
+    }
+
+    /// Marks the rows whose `DiffLine.id` is in `lineIDs` as the change a host is stepping
+    /// through, with a bar down their leading edge (`PatchTheme.currentChange`). A bar rather
+    /// than a tint, so it reads over the added/removed backgrounds and alongside a selection.
+    /// The host owns the stepping; scroll to the change with `.patchScrollTarget(_:)`.
+    public func patchCurrentChange(_ lineIDs: Set<Int>) -> some View {
+        environment(\.patchCurrentChange, lineIDs)
     }
 
     /// Drawn at the end of every diff row — a comment count, a marker for something the host
@@ -774,6 +792,7 @@ private struct PatchLineRow: View {
     @Environment(\.patchTheme) private var theme
     @Environment(\.patchLineTap) private var onTap
     @Environment(\.patchSelection) private var selection
+    @Environment(\.patchCurrentChange) private var currentChange
     @Environment(\.patchLineAccessory) private var accessory
     @Environment(\.patchFind) private var find
     @Environment(\.patchLineTapTarget) private var tapTarget
@@ -903,6 +922,11 @@ private struct PatchLineRow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(background)
         .overlay { if selection.contains(line.id) { theme.selection.allowsHitTesting(false) } }
+        .overlay(alignment: .leading) {
+            if currentChange.contains(line.id) {
+                theme.currentChange.frame(width: 3).allowsHitTesting(false)
+            }
+        }
         .modifier(TrailingChrome(accessory: wrap ? nil : accessory?(line), hover: hover?(line),
                                  hovering: $hovering))
     }
@@ -949,18 +973,20 @@ private struct PatchLineRow: View {
                                                 theme: theme.syntax)
         let tint = line.kind == .addition ? theme.addedEmphasis : theme.removedEmphasis
         let count = text.characters.count
-        func paint(_ range: Range<Int>, _ color: Color) {
+        func paint(_ range: Range<Int>, _ color: Color, text foreground: Color? = nil) {
             guard range.upperBound <= count else { return }
             let lower = text.characters.index(text.startIndex, offsetBy: range.lowerBound)
             let upper = text.characters.index(lower, offsetBy: range.count)
             text[lower..<upper].backgroundColor = color
+            if let foreground { text[lower..<upper].foregroundColor = foreground }
         }
         for range in emphasis { paint(range, tint) }
         // After the emphasis, so a match inside a changed word still shows as a match. Searched
         // per visible row rather than looked up: the rows are lazy, and one line is cheap.
         for range in DiffFind.ranges(in: line.text, query: find.query) {
             let isCurrent = find.current?.lineID == line.id && find.current?.range == range
-            paint(range, isCurrent ? theme.findCurrent : theme.findMatch)
+            paint(range, isCurrent ? theme.findCurrent : theme.findMatch,
+                  text: isCurrent ? theme.findCurrentText : nil)
         }
         return text
     }

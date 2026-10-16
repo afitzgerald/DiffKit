@@ -99,10 +99,14 @@ Git and rendering:
     scroll target finds a line's row in either. Unwrapped, each half is as wide as the longest
     line, so the pair scrolls sideways together; it needs a wide window, not a phone. A context
     line's accessory and hover view are drawn on the right half only.
+  - `.patchCurrentChange(lineIDs)`: a bar down the leading edge of those rows, for the change
+    a host's "next change" stepping is on. The host owns the stepping and scrolls with
+    `.patchScrollTarget`. Colour is `PatchTheme.currentChange` (accent by default).
   - `.patchFind(query, current: match)`: tints every occurrence of `query`, and `current` (one
     of `DiffFind.matches(…)`) more strongly. The host owns the query and the stepping; scroll
     to a match with `.patchScrollTarget(PatchScrollTarget(lineID: match.lineID))`. Colours are
-    `PatchTheme.findMatch` and `.findCurrent`.
+    `PatchTheme.findMatch`, `.findCurrent` and `.findCurrentText` (the current match's text,
+    black on solid yellow by default, so it stands out over any syntax colour).
   - `.patchFileText { file in … }`: the file's full text on the diff's new side, async, so the
     reader can reveal the unchanged lines between hunks, above the first and below the last, 20
     at a time or all at once. Unchanged lines are the same on both sides, so the new text is
