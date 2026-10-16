@@ -15,6 +15,7 @@ import AppKit
 // A piped or saved diff reads each file's new text from the current directory, so its unchanged
 // lines can be expanded: run it where the diff was taken.
 // Tap a row to toggle its selection, which exercises `.onPatchLineTap` and `.patchSelection`.
+// Step through changes with ⌥⌘↑ / ⌥⌘↓, which exercises `.patchCurrentChange` and `.patchScrollTarget`.
 
 @main
 struct PreviewApp: App {
@@ -94,8 +95,31 @@ struct PreviewRoot: View {
     @State private var customTheme = false
     @State private var selectedLines: Set<Int> = []
     @State private var lastTap = "Tap a row to select it"
+    @State private var changeIndex = 0
+    @State private var scrollTarget: PatchScrollTarget?
 
     private var file: FileChange? { files.first { $0.id == selected } }
+
+    /// The open file's changes: each run of added/removed rows, as a host's "next change" sees them.
+    private var changes: [[Int]] {
+        var runs: [[Int]] = []
+        for hunk in DiffParser.parse(file?.patch ?? "").hunks {
+            var run: [Int] = []
+            for line in hunk.lines {
+                if line.kind == .addition || line.kind == .deletion { run.append(line.id) }
+                else if !run.isEmpty { runs.append(run); run = [] }
+            }
+            if !run.isEmpty { runs.append(run) }
+        }
+        return runs
+    }
+
+    private func stepChange(_ delta: Int) {
+        let changes = changes
+        guard !changes.isEmpty else { return }
+        changeIndex = min(max(changeIndex + delta, 0), changes.count - 1)
+        scrollTarget = PatchScrollTarget(lineID: changes[changeIndex][0])
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -114,6 +138,8 @@ struct PreviewRoot: View {
                     .id(file.id)
                     .patchTheme(customTheme ? Self.contrast : PatchTheme())
                     .patchSelection(selectedLines)
+                    .patchCurrentChange(Set(changes.indices.contains(changeIndex) ? changes[changeIndex] : []))
+                    .patchScrollTarget(scrollTarget)
                     .patchLayout(split ? .split : .unified)
                     .patchLineTapTarget(gutterTaps ? .gutter : .row)
                     .patchLineNumbers(bothNumbers ? .both : .one)
@@ -147,9 +173,20 @@ struct PreviewRoot: View {
                     // or the file list on iPhone.
                     .onPatchFilesEnd { selected = nil }
                     .safeAreaInset(edge: .bottom) {
-                        Text(lastTap).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6).background(.bar)
+                        // The change stepper lives here, not in the toolbar, whose overflow hid it.
+                        HStack {
+                            Text(lastTap).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Button { stepChange(-1) } label: { Image(systemName: "arrow.up") }
+                                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                                .help("Previous change (⌥⌘↑)").disabled(changeIndex == 0)
+                            Text(changes.isEmpty ? "No changes" : "Change \(changeIndex + 1) of \(changes.count)")
+                                .monospacedDigit().fixedSize()
+                            Button { stepChange(1) } label: { Image(systemName: "arrow.down") }
+                                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                                .help("Next change (⌥⌘↓)").disabled(changeIndex >= changes.count - 1)
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(6).background(.bar)
                     }
                     // Drawn by SwiftUI rather than left to the window, so snapshots include it.
                     .background(.background)
@@ -166,7 +203,7 @@ struct PreviewRoot: View {
             Toggle("Old and new numbers", isOn: $bothNumbers)
             Toggle("Custom theme", isOn: $customTheme)
         }
-        .onChange(of: selected) { selectedLines = [] }
+        .onChange(of: selected) { selectedLines = []; changeIndex = 0 }
         .task {
             selected = files.first?.id
             #if os(macOS)
