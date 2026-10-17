@@ -20,7 +20,8 @@ Parsing and search:
 - `DiffParser`: `parse(_:) -> ParsedDiff`, `pair(_:)` (split-view rows),
   `inlineRanges(deleted:added:)` and `inlineRanges(old:new:)` (word-level changes),
   `unifiedPatch(from:to:)`, `isWhitespaceOnly(_:against:)`,
-  `hidingWhitespaceChanges(_:)` (a hunk's lines with whitespace-only edits taken out, both halves)
+  `hidingWhitespaceChanges(_:)` (a hunk's lines with whitespace-only edits taken out, both halves),
+  `changes(in:)` (each run of added/removed line ids, for `.patchCurrentChange` stepping)
 - `ParsedDiff`, `Hunk` (alias `DiffHunk`), `DiffLine`
 - `FileTree` (`fileOrder(for:)`, `firstPath(of:)`, `tree(of:)`, `Node`): directory-first file order
 - `DiffFind`: case-insensitive search in parsed lines or in a raw patch, and find across files:
