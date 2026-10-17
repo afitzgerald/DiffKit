@@ -199,6 +199,28 @@ public enum DiffParser {
                 heading.isEmpty ? nil : heading)
     }
 
+    // MARK: - Changes
+
+    /// The changes a host's "next change" steps through, in reading order: each run of added
+    /// and removed lines, as `DiffLine` ids. Pass one to `.patchCurrentChange` and scroll to
+    /// its first id. A "\ No newline at end of file" line stays in the run it follows, so
+    /// "-a / \ No newline / +a" is one change. Runs never span hunks.
+    public static func changes(in hunks: [Hunk]) -> [[Int]] {
+        var runs: [[Int]] = []
+        for hunk in hunks {
+            var run: [Int] = []
+            for line in hunk.lines {
+                switch line.kind {
+                case .addition, .deletion: run.append(line.id)
+                case .noNewline where !run.isEmpty: run.append(line.id)
+                default: if !run.isEmpty { runs.append(run); run = [] }
+                }
+            }
+            if !run.isEmpty { runs.append(run) }
+        }
+        return runs
+    }
+
     // MARK: - Split view
 
     /// Align a hunk into left/right rows. Within each contiguous change block deletions pair
@@ -552,6 +574,15 @@ extension DiffParser {
         assert(nnRows.count == 2, "expected 2 split rows, got \(nnRows.count)")
         assert(nnRows[0].left?.text == "old line" && nnRows[0].right?.text == "new line")
         assert(nnRows[1].left?.kind == .noNewline)
+
+        // Changes: a run per edit, ids in reading order, never across hunks.
+        let ids = { (h: Hunk) in h.lines.map(\.id) }
+        assert(changes(in: parsed.hunks) == [Array(ids(h1)[1...3]), Array(ids(h2)[1...4])],
+               "\(changes(in: parsed.hunks))")
+        assert(changes(in: nn.hunks) == [ids(nn.hunks[0])], "\(changes(in: nn.hunks))")
+        let two = parse("@@ -1,5 +1,5 @@\n-a\n+A\n keep\n-b\n+B\n end\n")
+        assert(changes(in: two.hunks) == [[0, 1], [3, 4]], "\(changes(in: two.hunks))")
+        assert(changes(in: parse("@@ -1,1 +1,1 @@\n same\n").hunks).isEmpty)
 
         let del = "let a = 1", add = "let a = 2"
         let refined = inlineRanges(deleted: del, added: add)

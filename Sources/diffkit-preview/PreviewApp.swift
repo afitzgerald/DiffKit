@@ -101,18 +101,7 @@ struct PreviewRoot: View {
     private var file: FileChange? { files.first { $0.id == selected } }
 
     /// The open file's changes: each run of added/removed rows, as a host's "next change" sees them.
-    private var changes: [[Int]] {
-        var runs: [[Int]] = []
-        for hunk in DiffParser.parse(file?.patch ?? "").hunks {
-            var run: [Int] = []
-            for line in hunk.lines {
-                if line.kind == .addition || line.kind == .deletion { run.append(line.id) }
-                else if !run.isEmpty { runs.append(run); run = [] }
-            }
-            if !run.isEmpty { runs.append(run) }
-        }
-        return runs
-    }
+    private var changes: [[Int]] { DiffParser.changes(in: DiffParser.parse(file?.patch ?? "").hunks) }
 
     private func stepChange(_ delta: Int) {
         let changes = changes
