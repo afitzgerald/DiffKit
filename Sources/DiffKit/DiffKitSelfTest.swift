@@ -9,6 +9,7 @@
         DiffFind.demo()
         SyntaxHighlighter.demo()
         PatchView.demo()
+        PatchRows.demo()
         PatchView.expansionDemo()
         PatchImagePreview.demo()
         MarkdownView.demo()

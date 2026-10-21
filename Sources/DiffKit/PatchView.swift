@@ -33,6 +33,9 @@ public struct PatchView: View {
     /// wide as the longest line, and a thread laid across it ran off screen to the right.
     @State private var viewportWidth: CGFloat = 0
     @Environment(\.patchFileText) private var fileText
+    /// The last target scrolled to, so `.onAppear` does not take the reader back to a row they
+    /// had long since left when this view is shown again.
+    @State private var lastTarget: PatchScrollTarget?
     /// The unchanged lines around the hunks, once the host's text has arrived and matched.
     @State private var expansion: PatchExpansion?
     /// How much of each gap is showing, keyed by its index in `PatchExpansion.gaps`.
@@ -58,6 +61,10 @@ public struct PatchView: View {
         self.wrap = wrap
         self.highlightsSyntax = highlightsSyntax
         self.hidesWhitespaceChanges = hidesWhitespaceChanges
+        // Built before: start from it, so the first frame has the rows, at their final height.
+        if let cached = PatchCache.shared.model(for: file, hidesWhitespaceChanges: hidesWhitespaceChanges) {
+            _model = State(initialValue: cached)
+        }
     }
 
     public init(file: FileChange, codeSize: Double = 12, wrap: Bool = false,
@@ -94,12 +101,21 @@ public struct PatchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: ModelKey(file: file, hidesWhitespaceChanges: hidesWhitespaceChanges)) {
             let file = file, hides = hidesWhitespaceChanges
-            let built = await Task.detached(priority: .userInitiated) {
-                PatchModel(file: file, hidesWhitespaceChanges: hides)
-            }.value
-            model = built
-            expansion = nil
-            revealed = [:]
+            let built: PatchModel
+            if let model, model.file == file, model.hidesWhitespaceChanges == hides {
+                // Shown again, which restarts this task: what was built, and the unchanged lines
+                // the reader revealed, still stand.
+                guard expansion == nil else { return }
+                built = model
+            } else {
+                built = await Task.detached(priority: .userInitiated) {
+                    PatchModel(file: file, hidesWhitespaceChanges: hides)
+                }.value
+                model = built
+                expansion = nil
+                revealed = [:]
+                PatchCache.shared.store(built)
+            }
             guard PatchExpansion.expandable(built) != nil, let text = await text(of: file),
                   !Task.isCancelled else { return }
             let expanded = await Task.detached(priority: .userInitiated) {
@@ -131,36 +147,15 @@ public struct PatchView: View {
         // column rather than each row separately — rows sliding independently is what makes
         // a per-row ScrollView unreadable.
         let content = LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(Array(parsed.hunks.enumerated()), id: \.element.id) { index, hunk in
-                gap(index, model: model, parsed: parsed)
-                Section {
-                    if layout == .split {
-                        ForEach(model.splitRows[index]) { pair in
-                            pairRow(pair, model: model, parsed: parsed)
-                        }
-                    } else {
-                        ForEach(hunk.lines) { line in
-                            unifiedRow(line, model: model)
-                        }
-                    }
-                } header: {
-                    PatchHunkHeader(hunk: hunk, size: codeSize)
-                }
-            }
-            gap(parsed.hunks.count, model: model, parsed: parsed)
-            if parsed.isTruncated {
-                Label("This diff was cut short after \(DiffParser.maxLines) lines.", systemImage: "scissors")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding()
-            }
+            rows(parsed, model: model)
         }
 
         ScrollViewReader { proxy in
             // Leading, not centre: the rows are as wide as the longest line, and `.center`
             // scrolled sideways to the middle of it, gutter off screen.
             let scroll = { (target: PatchScrollTarget?) in
-                guard let target else { return }
+                guard let target, target != lastTarget else { return }
+                lastTarget = target
                 // In split view a row holds two lines, so the line names its row.
                 let id = layout == .split ? model.splitRowID[target.lineID] : PatchScrollTarget.rowID(target.lineID)
                 guard let id else { return }
@@ -172,6 +167,34 @@ public struct PatchView: View {
                 // A target set while the model was still building — a host that opens a file
                 // at a find match — arrives before these rows exist, and onChange never sees it.
                 .onAppear { scroll(scrollTarget) }
+        }
+    }
+
+    /// The hunks, the unchanged lines between them, and the truncation note.
+    @ViewBuilder
+    private func rows(_ parsed: ParsedDiff, model: PatchModel) -> some View {
+        ForEach(Array(parsed.hunks.enumerated()), id: \.element.id) { index, hunk in
+            gap(index, model: model, parsed: parsed)
+            Section {
+                if layout == .split {
+                    ForEach(model.splitRows[index]) { pair in
+                        pairRow(pair, model: model, parsed: parsed)
+                    }
+                } else {
+                    ForEach(hunk.lines) { line in
+                        unifiedRow(line, model: model)
+                    }
+                }
+            } header: {
+                PatchHunkHeader(hunk: hunk, size: codeSize)
+            }
+        }
+        gap(parsed.hunks.count, model: model, parsed: parsed)
+        if parsed.isTruncated {
+            Label("This diff was cut short after \(DiffParser.maxLines) lines.", systemImage: "scissors")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding()
         }
     }
 
@@ -233,6 +256,15 @@ public struct PatchView: View {
             }
             ForEach(lines.suffix(shown.bottom)) { gapLine($0, model: model, parsed: parsed) }
         }
+    }
+
+    /// The unchanged lines before hunk `index`, from the hunk headers alone. None after the last
+    /// hunk: how long the file runs on is not in the patch.
+    static func knownGap(_ index: Int, in parsed: ParsedDiff) -> Int? {
+        let hunks = parsed.hunks
+        guard hunks.indices.contains(index) else { return nil }
+        let end = index == 0 ? 1 : hunks[index - 1].newStart + hunks[index - 1].newCount
+        return hunks[index].newStart - end
     }
 
     @ViewBuilder
@@ -323,6 +355,43 @@ public struct PatchView: View {
 }
 
 // MARK: - Model
+
+/// Models already built, with their unchanged lines and what of them was revealed, so a
+/// `PatchView` made again draws its rows on its first frame. A host's lazy page discards views
+/// it has scrolled past and makes them again within a fraction of a second; rebuilt from
+/// nothing, a file went spinner, rows, unchanged lines — three heights, each moving everything
+/// below it. Bounded: the most recently built `capacity` files.
+final class PatchCache: @unchecked Sendable {
+    static let shared = PatchCache()
+    static let capacity = 48
+
+    private let lock = NSLock()
+    private var entries: [String: PatchModel] = [:]
+    private var order: [String] = []
+
+    private static func key(_ path: String, _ hides: Bool) -> String { "\(hides ? 1 : 0)\(path)" }
+
+    /// The model for exactly this file — a push that changed its patch misses. Only the model:
+    /// it depends on the patch alone, where the unchanged lines around it depend on which
+    /// revision the host read, which nothing here knows — the same patch in two repositories,
+    /// or on a branch whose base moved, would show the other's lines.
+    func model(for file: FileChange, hidesWhitespaceChanges: Bool) -> PatchModel? {
+        lock.withLock {
+            guard let model = entries[Self.key(file.path, hidesWhitespaceChanges)], model.file == file else { return nil }
+            return model
+        }
+    }
+
+    /// Kept as the most recently built: a store moves its file to the back of the queue.
+    func store(_ model: PatchModel) {
+        lock.withLock {
+            let key = Self.key(model.file.path, model.hidesWhitespaceChanges)
+            if entries.updateValue(model, forKey: key) != nil { order.removeAll { $0 == key } }
+            order.append(key)
+            while order.count > Self.capacity { entries[order.removeFirst()] = nil }
+        }
+    }
+}
 
 /// What a `PatchModel` is built from, as the view's task identity: a new file or a flipped
 /// whitespace setting rebuilds it.
@@ -452,11 +521,11 @@ struct PatchModel: Sendable {
 
 /// One split-view row: the old side's line and the new side's, either missing opposite an
 /// unpaired change. A context line is both.
-struct SplitRow: Identifiable, Sendable {
+public struct SplitRow: Identifiable, Sendable {
     let left: DiffLine?
     let right: DiffLine?
     /// Named for its first line, which `pair` guarantees exists.
-    var id: String { "patch-pair-\((left ?? right)?.id ?? -1)" }
+    public var id: String { "patch-pair-\((left ?? right)?.id ?? -1)" }
 }
 
 // MARK: - Hooks
@@ -709,11 +778,12 @@ extension View {
     public func patchFileText(_ text: @escaping (FileChange) async -> String?) -> some View {
         environment(\.patchFileText, text)
     }
+
 }
 
 // MARK: - Rows
 
-private struct PatchHunkHeader: View {
+struct PatchHunkHeader: View {
     let hunk: Hunk
     let size: Double
 
@@ -740,7 +810,7 @@ private struct PatchHunkHeader: View {
 /// Between hunks: how many unchanged lines are hidden, and buttons to reveal them. `edges` are
 /// the ends of the gap a step can reveal from: `.top` continues down from the hunk above,
 /// `.bottom` up from the hunk below. A gap of one step or less only offers all of it.
-private struct PatchGapRow: View {
+struct PatchGapRow: View {
     let hidden: Int
     let size: Double
     let edges: [VerticalEdge]
@@ -759,7 +829,9 @@ private struct PatchGapRow: View {
                 }
             }
             Button { reveal(nil) } label: {
-                Label(hidden == 1 ? "Show 1 unchanged line" : "Show \(hidden) unchanged lines",
+                // No count yet: the lines after the last hunk, before the file's text is in.
+                Label(hidden == 0 ? "Show unchanged lines"
+                      : hidden == 1 ? "Show 1 unchanged line" : "Show \(hidden) unchanged lines",
                       systemImage: "arrow.up.and.down")
             }
             Spacer(minLength: 0)
@@ -773,7 +845,7 @@ private struct PatchGapRow: View {
     }
 }
 
-private struct PatchLineRow: View {
+struct PatchLineRow: View {
     let line: DiffLine
     let language: CodeLanguage
     let startState: HighlightState
@@ -820,7 +892,10 @@ private struct PatchLineRow: View {
     /// idle `onHover` on every row of a long diff is a tracking area each, for nothing.
     private struct TrailingChrome: ViewModifier {
         let accessory: AnyView?
-        let hover: AnyView?
+        /// Built only for the row under the pointer. Built for every row on every render, it
+        /// made each row depend on whatever the host's hover view reads — and a host whose +
+        /// waits out a scroll re-rendered every row of the page as each scroll began and ended.
+        let hover: (() -> AnyView)?
         @Binding var hovering: Bool
         @State private var inset: CGFloat = 0
 
@@ -839,7 +914,7 @@ private struct PatchLineRow: View {
                 .overlay(alignment: .trailing) {
                     HStack(spacing: 4) {
                         accessory?.fixedSize()
-                        if hovering, let hover { hover }
+                        if hovering, let hover { hover() }
                     }
                     .padding(.trailing, 6 + inset)
                 }
@@ -927,7 +1002,8 @@ private struct PatchLineRow: View {
                 theme.currentChange.frame(width: 3).allowsHitTesting(false)
             }
         }
-        .modifier(TrailingChrome(accessory: wrap ? nil : accessory?(line), hover: hover?(line),
+        .modifier(TrailingChrome(accessory: wrap ? nil : accessory?(line),
+                                 hover: hover.map { build in { build(line) } },
                                  hovering: $hovering))
     }
 
@@ -998,6 +1074,34 @@ extension PatchView {
     /// Checks the part of the view that is logic: which placeholder a file gets and which
     /// characters are emphasised. Rendering itself is not checked.
     @_spi(Testing) public static func demo() {
+        // A rebuilt view starts from the cache: the same file hits, a changed patch or the other
+        // whitespace setting misses, and the oldest goes once it is full.
+        let cache = PatchCache()
+        let cached = FileChange(path: "c.swift", status: .modified, additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b")
+        cache.store(PatchModel(file: cached))
+        assert(cache.model(for: cached, hidesWhitespaceChanges: false) != nil)
+        var pushed = cached
+        pushed.patch = "@@ -1 +1 @@\n-a\n+c"
+        assert(cache.model(for: pushed, hidesWhitespaceChanges: false) == nil, "a changed patch misses")
+        assert(cache.model(for: cached, hidesWhitespaceChanges: true) == nil)
+        // Stored again, a file goes to the back of the queue: built most recently, kept longest.
+        for i in 0..<PatchCache.capacity - 1 {
+            cache.store(PatchModel(file: FileChange(path: "f\(i)", status: .modified, additions: 1, deletions: 0, patch: "@@ -1 +1 @@\n+x")))
+        }
+        cache.store(PatchModel(file: cached))
+        cache.store(PatchModel(file: FileChange(path: "one-more", status: .modified, additions: 1, deletions: 0, patch: "@@ -1 +1 @@\n+x")))
+        assert(cache.model(for: cached, hidesWhitespaceChanges: false) != nil, "re-stored, not the oldest")
+        for i in 0..<PatchCache.capacity {
+            cache.store(PatchModel(file: FileChange(path: "g\(i)", status: .modified, additions: 1, deletions: 0, patch: "@@ -1 +1 @@\n+x")))
+        }
+        assert(cache.model(for: cached, hidesWhitespaceChanges: false) == nil, "the oldest goes")
+        // The unchanged lines a stacked file reserves before its text arrives: from the headers,
+        // above the first hunk and between hunks, and nothing after the last.
+        let twoHunks = DiffParser.parse("@@ -1,3 +5,3 @@\n a\n-b\n+c\n d\n@@ -10,2 +20,2 @@\n-e\n+f\n g")
+        assert(knownGap(0, in: twoHunks) == 4, "\(String(describing: knownGap(0, in: twoHunks)))")
+        assert(knownGap(1, in: twoHunks) == 12, "\(String(describing: knownGap(1, in: twoHunks)))")
+        assert(knownGap(2, in: twoHunks) == nil)
+        assert(knownGap(0, in: DiffParser.parse("@@ -1,2 +1,2 @@\n-a\n+b\n c")) == 0)
         func content(_ f: FileChange) -> String {
             switch PatchModel(file: f).content {
             case .diff(let p): return p.isTruncated ? "truncated" : "diff"
