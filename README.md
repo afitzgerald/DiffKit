@@ -68,6 +68,26 @@ Git and rendering:
   - `hidesWhitespaceChanges: true` drops whitespace-only edits, and says "Only whitespace
     changed" for a file with nothing else. Parsing, emphasis and highlighter state are
   computed off the main actor. The code text is selectable.
+- `PatchRows(_ file: PatchFile, codeSize:wrap:highlightsSyntax:)`: the same rows, with no
+  scroll view of their own, for a host that shows many files on one page. Put it inside the
+  host's `LazyVStack` and each row becomes an item of that stack, so only rows on screen are
+  laid out however many files there are. The hooks work as on `PatchView`, except
+  `.patchScrollTarget`: scrolling is the host's, by the row ids below.
+  - `PatchFile(file:hidesWhitespaceChanges:)` holds one file's parsed diff and revealed lines;
+    keep it while the page shows the file, since its rows come and go with the stack.
+  - `PatchFile.items(layout:reservesGaps:)` and `PatchRow(_:of:codeSize:wrap:highlightsSyntax:)`:
+    the same rows as a list and one row, for a host whose own `ForEach` lists every file's rows.
+    A lazy stack places one flat list more cheaply than a `PatchRows` per file.
+  - Item ids are `PatchRows.itemID(path, local)`, and `PatchRows.path(ofItem:)` reads one back.
+    Give the host's own items (a header) ids the same way. `PatchFile.itemID(forLine:layout:)`
+    is a line's row, for `scrollTo`.
+  - `.patchPagePosition(_:fileChanged:)` with a `PatchPagePosition` tracks the item at the top
+    and calls back when its file changes; set `top` to an item's id to jump there. The stack
+    needs `.scrollTargetLayout()`, or nothing is reported. The position lives in a class the
+    page's body does not read, so a row scrolling past does not redraw the page.
+  - Unwrapped, give the stack `PatchRows.width(of:codeSize:lineNumbers:layout:)` of its widest
+    file and `.patchViewportWidth(_:)` of the visible width, so long lines scroll sideways as
+    one page while attachments (comment threads) stay as wide as the screen.
 - Hooks for `PatchView`. They are environment modifiers, so they apply to every
   `PatchView` inside the view they're set on:
   - `.patchTheme(PatchTheme(...))`: every colour, including emphasis, selection and the

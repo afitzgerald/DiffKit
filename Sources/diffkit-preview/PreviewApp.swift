@@ -93,6 +93,12 @@ struct PreviewRoot: View {
     @State private var gutterTaps = false
     @State private var bothNumbers = false
     @State private var customTheme = false
+    @State private var stacked = false
+    /// The file at the top of the stacked page, as its scroll position reports it.
+    @State private var visible: FileChange.ID?
+    @State private var scrolledTo: FileChange.ID?
+    /// One `PatchFile` per file, kept while the page shows them.
+    @State private var pool = PatchFilePool()
     @State private var selectedLines: Set<Int> = []
     @State private var lastTap = "Tap a row to select it"
     @State private var changeIndex = 0
@@ -122,7 +128,9 @@ struct PreviewRoot: View {
             }
             .navigationTitle("\(files.count) files")
         } detail: {
-            if let file {
+            if stacked {
+                stackedFiles
+            } else if let file {
                 PatchView(file: file, codeSize: codeSize, wrap: wrap)
                     .id(file.id)
                     .patchTheme(customTheme ? Self.contrast : PatchTheme())
@@ -191,14 +199,98 @@ struct PreviewRoot: View {
             Toggle("Gutter taps", isOn: $gutterTaps)
             Toggle("Old and new numbers", isOn: $bothNumbers)
             Toggle("Custom theme", isOn: $customTheme)
+            Toggle("Stacked", isOn: $stacked)
         }
-        .onChange(of: selected) { selectedLines = []; changeIndex = 0 }
+        .onChange(of: selected) {
+            selectedLines = []
+            changeIndex = 0
+            // The old file's target, given to the new one, scrolled it to an unrelated row.
+            scrollTarget = nil
+        }
         .task {
             selected = files.first?.id
             #if os(macOS)
             if let snapshotDir { await snapshot(into: snapshotDir) }
             #endif
         }
+    }
+
+    /// Every file on one page, its rows (`PatchRows`) items of one lazy stack. The sidebar selection follows the file whose
+    /// header floats at the top, and selecting a file scrolls to it.
+    private var stackedFiles: some View {
+        GeometryReader { area in
+            ScrollViewReader { proxy in
+                ScrollView(wrap ? .vertical : [.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(files) { file in
+                            stackedHeader(file).id(PatchRows.itemID(file.path, "header"))
+                            // The stepper's hook on the selected file only: rows are numbered per file.
+                            PatchRows(pool.file(for: file), codeSize: codeSize, wrap: wrap)
+                                .patchCurrentChange(file.id == selected && changes.indices.contains(changeIndex)
+                                                    ? Set(changes[changeIndex]) : [])
+                        }
+                        // Room below the last file, so it can reach the top too.
+                        Color.clear.frame(height: area.size.height)
+                    }
+                    .frame(width: wrap ? area.size.width : pageWidth(area.size.width), alignment: .leading)
+                    .scrollTargetLayout()
+                }
+                .scrollPosition(id: $visible, anchor: .topLeading)
+                // DIFFKIT_STEP: every scroll offset, timed, to see a step move the page once or bounce.
+                .modifier(ScrollTrace())
+                .overlay(alignment: .top) {
+                    if let file = files.first(where: { $0.id == (selected ?? files.first?.id) }) { stackedHeader(file) }
+                }
+                // `visible` is a row's id, not updated by a scrollTo; the reader's own scroll is
+                // told apart by what it last reported.
+                .onChange(of: visible) { _, id in
+                    guard let id else { return }
+                    let path = PatchRows.path(ofItem: id)
+                    guard path != selected else { return }
+                    scrolledTo = path
+                    selected = path
+                }
+                .onChange(of: selected) { _, id in
+                    guard let id, id != scrolledTo else { return }
+                    scrolledTo = nil
+                    visible = PatchRows.itemID(id, "header")
+                }
+                // The page scrolls to a row itself: `PatchRows` has no scroll of its own.
+                .onChange(of: scrollTarget) { _, target in
+                    guard stacked, let target, let file = files.first(where: { $0.id == selected }),
+                          let id = pool.file(for: file).itemID(forLine: target.lineID, layout: split ? .split : .unified)
+                    else { return }
+                    visible = nil; withAnimation { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.5)) }
+                }
+            }
+            .patchViewportWidth(area.size.width)
+        }
+        .patchFileText { file in
+            if let texts = Options.current.texts { return texts[file.path] }
+            return try? String(contentsOfFile: file.path, encoding: .utf8)
+        }
+        .patchTheme(customTheme ? Self.contrast : PatchTheme())
+        .patchLayout(split ? .split : .unified)
+        .patchLineNumbers(bothNumbers ? .both : .one)
+        .background(.background)
+    }
+
+    /// As wide as the widest file needs, unwrapped.
+    private func pageWidth(_ visible: CGFloat) -> CGFloat {
+        files.map { PatchRows.width(of: $0, codeSize: codeSize, lineNumbers: bothNumbers ? .both : .one,
+                                    layout: split ? .split : .unified) }.reduce(visible, max)
+    }
+
+    private func stackedHeader(_ file: FileChange) -> some View {
+        HStack {
+            Text(file.path).font(.callout.monospaced()).lineLimit(1).truncationMode(.head)
+            Spacer()
+            Text("+\(file.additions) −\(file.deletions)").font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func selectedAnchors(in file: FileChange) -> Set<DiffAnchor> {
@@ -212,11 +304,31 @@ struct PreviewRoot: View {
                                      addedEmphasis: .blue.opacity(0.4), removedEmphasis: .orange.opacity(0.4),
                                      selection: .yellow.opacity(0.35))
 
+    /// DIFFKIT_STEP: the file to step through, and every scroll offset logged (`ScrollTrace`).
+    static let stepTrace = ProcessInfo.processInfo.environment["DIFFKIT_STEP"]
+    static let traceStart = Date()
+
     #if os(macOS)
     /// Renders each file in turn from the live window, so it goes through the same layout,
     /// `.task` loading and scroll views as a person would see.
+
     private func snapshot(into dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let path = Self.stepTrace, let file = files.first(where: { $0.path == path }) {
+            stacked = true
+            // The page has to be up before a selection can scroll it.
+            try? await Task.sleep(for: .seconds(1))
+            selected = file.id
+            try? await Task.sleep(for: .seconds(2))
+            for n in 1...4 {
+                print(String(format: "STEP %d at %.3f", n, Date().timeIntervalSince(Self.traceStart)))
+                stepChange(1)
+                try? await Task.sleep(for: .milliseconds(2500))
+            }
+            await capture(dir.appendingPathComponent("trace.png"))
+            NSApp.terminate(nil)
+            return
+        }
         for (n, file) in files.enumerated() {
             selected = file.id
             await capture(dir.appendingPathComponent(
@@ -236,6 +348,27 @@ struct PreviewRoot: View {
             split = true
             wrap = true
             await capture(dir.appendingPathComponent("split.png"))
+            split = false
+            wrap = false
+            customTheme = false
+            stacked = true
+            selected = files.first?.id
+            await capture(dir.appendingPathComponent("stacked.png"))
+            selected = files[min(3, files.count - 1)].id
+            await capture(dir.appendingPathComponent("stacked-jump.png"))
+            // A step to a change well down a file must scroll the page, not just move the bar.
+            if let expandable = files.first(where: { $0.path == "zz/expandable.swift" }) {
+                selected = expandable.id
+                try? await Task.sleep(for: .milliseconds(1500))
+                stepChange(1)
+                await capture(dir.appendingPathComponent("stacked-step.png"))
+                // Wrapped, the rows are not inside a sideways scroll of their own.
+                wrap = true
+                stepChange(-1)
+                try? await Task.sleep(for: .milliseconds(900))
+                stepChange(1)
+                await capture(dir.appendingPathComponent("stacked-step-wrapped.png"))
+            }
         }
         NSApp.terminate(nil)
     }
@@ -249,4 +382,30 @@ struct PreviewRoot: View {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
     #endif
+}
+
+/// DIFFKIT_STEP's offset log; see `PreviewRoot.snapshot`.
+struct ScrollTrace: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, iOS 18, *), PreviewRoot.stepTrace != nil {
+            content.onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+                print(String(format: "SCROLL %.3f %.1f", Date().timeIntervalSince(PreviewRoot.traceStart), y))
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// The stacked page's `PatchFile`s, made on first use. A class, so making one inside a body
+/// does not count as a state change.
+final class PatchFilePool {
+    private var files: [String: PatchFile] = [:]
+
+    func file(for file: FileChange) -> PatchFile {
+        if let made = files[file.path], made.file == file { return made }
+        let made = PatchFile(file: file)
+        files[file.path] = made
+        return made
+    }
 }
