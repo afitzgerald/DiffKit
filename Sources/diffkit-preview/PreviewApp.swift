@@ -133,6 +133,7 @@ struct PreviewRoot: View {
             } else if let file {
                 PatchView(file: file, codeSize: codeSize, wrap: wrap)
                     .id(file.id)
+                    .patchPinchZoom($codeSize, in: 8...20)
                     .patchTheme(customTheme ? Self.contrast : PatchTheme())
                     .patchSelection(selectedLines)
                     .patchCurrentChange(Set(changes.indices.contains(changeIndex) ? changes[changeIndex] : []))
@@ -236,6 +237,7 @@ struct PreviewRoot: View {
                     .scrollTargetLayout()
                 }
                 .scrollPosition(id: $visible, anchor: .topLeading)
+                .patchPinchZoom($codeSize, in: 8...20)
                 // DIFFKIT_STEP: every scroll offset, timed, to see a step move the page once or bounce.
                 .modifier(ScrollTrace())
                 .overlay(alignment: .top) {
