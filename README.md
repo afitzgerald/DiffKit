@@ -88,6 +88,8 @@ Git and rendering:
   - Unwrapped, give the stack `PatchRows.width(of:codeSize:lineNumbers:layout:)` of its widest
     file and `.patchViewportWidth(_:)` of the visible width, so long lines scroll sideways as
     one page while attachments (comment threads) stay as wide as the screen.
+- `.patchPinchZoom($codeSize, in: 8...24)`: pinch to change the host's `codeSize`, in whole
+  points. Put it on a `PatchView`, or on the scroll view of a `PatchRows` page.
 - Hooks for `PatchView`. They are environment modifiers, so they apply to every
   `PatchView` inside the view they're set on:
   - `.patchTheme(PatchTheme(...))`: every colour, including emphasis, selection and the

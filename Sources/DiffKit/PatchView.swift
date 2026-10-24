@@ -779,6 +779,31 @@ extension View {
         environment(\.patchFileText, text)
     }
 
+    /// Pinch (or a trackpad pinch) to change `codeSize`, the host's own value, within `range`.
+    /// Put it on a `PatchView`, or on the scroll view of a `PatchRows` page. The size moves in
+    /// whole points, so a pinch lays the rows out again a few times rather than every frame.
+    public func patchPinchZoom(_ codeSize: Binding<Double>, in range: ClosedRange<Double> = 8...24) -> some View {
+        modifier(PatchPinchZoom(codeSize: codeSize, range: range))
+    }
+}
+
+private struct PatchPinchZoom: ViewModifier {
+    @Binding var codeSize: Double
+    let range: ClosedRange<Double>
+    /// The size when the pinch began. Gesture state, so a cancelled pinch resets it too.
+    @GestureState private var start: Double?
+
+    func body(content: Content) -> some View {
+        // Simultaneous, so the scroll view under it still scrolls.
+        content.simultaneousGesture(
+            MagnifyGesture().updating($start) { value, start, _ in
+                let base = start ?? codeSize
+                start = base
+                let size = min(max((base * value.magnification).rounded(), range.lowerBound), range.upperBound)
+                if size != codeSize { codeSize = size }
+            }
+        )
+    }
 }
 
 // MARK: - Rows
