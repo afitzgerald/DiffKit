@@ -10,6 +10,7 @@
         SyntaxHighlighter.demo()
         PatchView.demo()
         PatchRows.demo()
+        PatchPageWindow.demo()
         PatchView.expansionDemo()
         PatchImagePreview.demo()
         MarkdownView.demo()
