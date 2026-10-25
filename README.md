@@ -85,6 +85,18 @@ Git and rendering:
     and calls back when its file changes; set `top` to an item's id to jump there. The stack
     needs `.scrollTargetLayout()`, or nothing is reported. The position lives in a class the
     page's body does not read, so a row scrolling past does not redraw the page.
+  - `PatchPageWindow`: for a page of many files, list only the files near the top and stand
+    one spacer in for each file further off. A lazy stack's cost is per item, not per item on
+    screen: 150 files read through is about 50,000 items and most frames dropped. The host
+    feeds it each item's measured height (`record`), asks for a `plan(heights:top:budget:)`
+    (the files to list and the points of spacer above and below), and puts the spacers
+    *outside* the `LazyVStack`, in a plain `VStack`: inside it they are sized as one row each.
+    `.patchFollowsScrollbar` and `fileToFollow` name the file under the scrollbar when it is
+    dragged into a spacer, since `.patchPagePosition` has no item there to report; the host
+    selects that file and jumps to it. An unseen row is estimated by the median of the first
+    64 rows, fixed thereafter: a moving estimate shifts the spacers and the selection flips
+    between two files. Before macOS 15 the scroll geometry is not reported, and every file is
+    listed.
   - Unwrapped, give the stack `PatchRows.width(of:codeSize:lineNumbers:layout:)` of its widest
     file and `.patchViewportWidth(_:)` of the visible width, so long lines scroll sideways as
     one page while attachments (comment threads) stay as wide as the screen.
