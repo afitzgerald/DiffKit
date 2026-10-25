@@ -781,7 +781,8 @@ extension View {
 
     /// Pinch (or a trackpad pinch) to change `codeSize`, the host's own value, within `range`.
     /// Put it on a `PatchView`, or on the scroll view of a `PatchRows` page. The size moves in
-    /// whole points, so a pinch lays the rows out again a few times rather than every frame.
+    /// whole points, and only when the pinch ends: during it the content scales, so a pinch lays
+    /// the rows out again once rather than on every change.
     public func patchPinchZoom(_ codeSize: Binding<Double>, in range: ClosedRange<Double> = 8...24) -> some View {
         modifier(PatchPinchZoom(codeSize: codeSize, range: range))
     }
@@ -790,19 +791,35 @@ extension View {
 private struct PatchPinchZoom: ViewModifier {
     @Binding var codeSize: Double
     let range: ClosedRange<Double>
-    /// The size when the pinch began. Gesture state, so a cancelled pinch resets it too.
-    @GestureState private var start: Double?
+    /// The pinch so far. Gesture state, so a cancelled pinch resets it and writes nothing.
+    @GestureState private var pinch: Pinch?
+
+    private struct Pinch {
+        var scale: Double
+        var anchor: UnitPoint
+    }
 
     func body(content: Content) -> some View {
-        // Simultaneous, so the scroll view under it still scrolls.
-        content.simultaneousGesture(
-            MagnifyGesture().updating($start) { value, start, _ in
-                let base = start ?? codeSize
-                start = base
-                let size = min(max((base * value.magnification).rounded(), range.lowerBound), range.upperBound)
-                if size != codeSize { codeSize = size }
-            }
-        )
+        // Simultaneous, so the scroll view under it still scrolls. The rows are laid out again
+        // once, when the fingers lift; until then the content only scales, which is cheap.
+        content
+            .scaleEffect(pinch?.scale ?? 1, anchor: pinch?.anchor ?? .center)
+            .clipped()
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .updating($pinch) { value, pinch, _ in
+                        let target = clamped(codeSize * value.magnification)
+                        pinch = Pinch(scale: target / codeSize, anchor: value.startAnchor)
+                    }
+                    .onEnded { value in
+                        let size = clamped(codeSize * value.magnification).rounded()
+                        if size != codeSize { codeSize = size }
+                    }
+            )
+    }
+
+    private func clamped(_ size: Double) -> Double {
+        size.isFinite ? min(max(size, range.lowerBound), range.upperBound) : codeSize
     }
 }
 
