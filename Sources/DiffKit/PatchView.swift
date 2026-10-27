@@ -873,6 +873,7 @@ struct PatchGapRow: View {
             Button { reveal(nil) } label: {
                 // No count yet: the lines after the last hunk, before the file's text is in.
                 Label(hidden == 0 ? "Show unchanged lines"
+                      : hidden > GapReveal.chunk ? "Show \(GapReveal.chunk) of \(hidden) unchanged lines"
                       : hidden == 1 ? "Show 1 unchanged line" : "Show \(hidden) unchanged lines",
                       systemImage: "arrow.up.and.down")
             }

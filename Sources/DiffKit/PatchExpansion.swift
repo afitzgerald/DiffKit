@@ -83,18 +83,21 @@ struct PatchExpansion: Sendable {
 /// above) and from its bottom (continuing up from the hunk below).
 struct GapReveal: Equatable {
     static let step = 20
+    /// The most the main button reveals at once, so a gap of thousands of lines opens a page at
+    /// a time rather than all of it.
+    static let chunk = 100
     var top = 0
     var bottom = 0
 
     func hidden(of count: Int) -> Int { max(0, count - top - bottom) }
 
-    /// `step` more lines from that edge, or every hidden line for `nil`.
+    /// `step` more lines from that edge, or up to `chunk` from the top for `nil`.
     mutating func reveal(_ edge: VerticalEdge?, of count: Int) {
         let hidden = hidden(of: count)
         switch edge {
         case .top: top += min(Self.step, hidden)
         case .bottom: bottom += min(Self.step, hidden)
-        case nil: top += hidden
+        case nil: top += min(Self.chunk, hidden)
         }
     }
 }
@@ -176,7 +179,7 @@ extension PatchView {
         assert(commented?.highlightStates[-4]?.blockCommentDepth == 1)
         assert(commented?.highlightStates[-1] == nil && commented?.highlightStates[-5] == nil)
 
-        // Revealing: 20 at a time from either edge, never past the gap, or all at once.
+        // Revealing: 20 at a time from either edge, never past the gap, or 100 at once.
         var r = GapReveal()
         r.reveal(.top, of: 50)
         r.reveal(.bottom, of: 50)
@@ -186,5 +189,8 @@ extension PatchView {
         var all = GapReveal(top: 0, bottom: 3)
         all.reveal(nil, of: 50)
         assert(all.hidden(of: 50) == 0)
+        var long = GapReveal()
+        long.reveal(nil, of: 1498)
+        assert(long.top == 100 && long.hidden(of: 1498) == 1398)
     }
 }
