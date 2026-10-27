@@ -21,6 +21,7 @@ public struct PatchFileStepper: View {
     @Binding var selection: FileChange.ID?
     let viewed: Binding<Set<FileChange.ID>>?
     @Environment(\.patchFilesEnd) private var onEnd
+    @Environment(\.patchFilesDone) private var onDone
 
     public init(files: [FileChange], selection: Binding<FileChange.ID?>) {
         self.files = files
@@ -46,6 +47,15 @@ public struct PatchFileStepper: View {
                 step("checkmark", "]", "Done (⌘])", enabled: !files.isEmpty) { advance(from: i, to: nil) }
             } else {
                 step("chevron.down", "]", "Next file (⌘])", enabled: next != nil) { advance(from: i, to: next) }
+            }
+            if let onDone {
+                Divider().frame(height: 20)
+                Button("Done", action: onDone)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .contentShape(Capsule())
+                    .help("Done")
             }
         }
         .buttonStyle(.plain)
@@ -104,11 +114,16 @@ public struct PatchFileStepper: View {
 }
 
 private struct PatchFilesEndKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+private struct PatchFilesDoneKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
 
 extension EnvironmentValues {
     var patchFilesEnd: (() -> Void)? {
         get { self[PatchFilesEndKey.self] }
         set { self[PatchFilesEndKey.self] = newValue }
+    }
+    var patchFilesDone: (() -> Void)? {
+        get { self[PatchFilesDoneKey.self] }
+        set { self[PatchFilesDoneKey.self] = newValue }
     }
 }
 
@@ -117,5 +132,11 @@ extension View {
     /// no unviewed file left — e.g. to close the diff. Without it, "next" is disabled there.
     public func onPatchFilesEnd(perform action: @escaping () -> Void) -> some View {
         environment(\.patchFilesEnd, action)
+    }
+
+    /// Adds a "Done" button to the end of the stepper, on every file, that calls this: a way out
+    /// of the diff that does not wait for the last file. Without it, the stepper has no button.
+    public func onPatchFilesDone(perform action: @escaping () -> Void) -> some View {
+        environment(\.patchFilesDone, action)
     }
 }
