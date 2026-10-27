@@ -170,6 +170,7 @@ struct PreviewRoot: View {
                     // Stands in for the host closing its diff screen: back to "Select a file",
                     // or the file list on iPhone.
                     .onPatchFilesEnd { selected = nil }
+                    .onPatchFilesDone { selected = nil }
                     .safeAreaInset(edge: .bottom) {
                         // The change stepper lives here, not in the toolbar, whose overflow hid it.
                         HStack {

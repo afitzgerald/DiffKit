@@ -172,6 +172,9 @@ Git and rendering:
   - `.onPatchFilesEnd { … }`: on the last file (with `viewed:`, when no other file is
     unviewed), "next" becomes a checkmark that calls this, e.g. to close the diff. Without
     it, "next" is disabled there.
+  - `.onPatchFilesDone { … }`: adds a "Done" button to the end of the capsule, on every file,
+    that calls this, e.g. to leave the diff without stepping to the last file. Without it,
+    there is no such button.
 
 ## Markdown
 
