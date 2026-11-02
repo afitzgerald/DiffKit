@@ -83,8 +83,11 @@ public final class PatchPageWindow {
             // Zero counts: a file with nothing above its rows has a chrome of no height.
             file.fixed[part] = height
         } else {
-            // Not a zero: a row in a file whose patch is not built is a placeholder.
-            guard height > 0 else { return }
+            // Not a zero: a row in a file whose patch is not built is a placeholder. Nor the
+            // loading row, which stands as tall as the whole file will be: kept, it stayed in the
+            // sum after the real rows came, parked every file at twice its height, and the spacer
+            // above the window ran past the reader, who was then taken back to a file above.
+            guard height > 0, part != PatchRows.Item.loading.id else { return }
             let before = file.rows.updateValue(height, forKey: part)
             file.rowsSum += height - (before ?? 0)
             if before == nil, var sample = unseenSample {
@@ -249,6 +252,10 @@ extension PatchPageWindow {
         // A zero row is a placeholder, and a zero chrome is a real height.
         w.record("a", "row9", height: 0)
         assert(w.parkedHeight(of: "a", rows: 3, collapsed: false, note: false) == 40 + measuredRows)
+        // Nor is the loading row a row: it stood in for the whole file before the rows came.
+        w.record("a", PatchRows.Item.loading.id, height: 1_200)
+        assert(w.parkedHeight(of: "a", rows: 3, collapsed: false, note: false) == 40 + measuredRows,
+               "the loading row is not counted")
         // New measurements hold only for the layout they were made in.
         w.measuring(under: "other")
         assert(w.parkedHeight(of: "a", rows: 5, collapsed: false, note: false) == 36 + 80 + 5 * 20)
