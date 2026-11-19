@@ -9,7 +9,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "DiffKit",
-                // mermaid.js 11.12.1 (MIT), for ```mermaid blocks in MarkdownView. Copied, so the
+                // mermaid.js 12.3.0 (MIT), for ```mermaid blocks in MarkdownView. Copied, so the
                 // page finds the script next to it.
                 resources: [.copy("Resources/mermaid.html"), .copy("Resources/mermaid.min.js"),
                             .copy("Resources/mermaid-LICENSE.txt")],

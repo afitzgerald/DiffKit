@@ -187,7 +187,7 @@ links, strips inline HTML, and draws anything it doesn't recognise as prose.
   private repo's attachments return 404 without them), draw it yourself:
   `.markdownMedia { media in … }`, where `media` is `.image(alt:url:)` or `.video(url)`.
 - A task box ticks in `PatchTheme.added`.
-- A ```` ```mermaid ```` block is drawn as a diagram by mermaid.js 11.12.1 (MIT,
+- A ```` ```mermaid ```` block is drawn as a diagram by mermaid.js 12.3.0 (MIT,
   `Sources/DiffKit/Resources/`). Each diagram gets its own small `WKWebView`. Mermaid runs
   with `securityLevel: 'strict'`, and the page loads nothing but the bundled script and
   navigates nowhere. The diagram follows light and dark mode, scales down to fit, and never
@@ -197,7 +197,6 @@ links, strips inline HTML, and draws anything it doesn't recognise as prose.
   into an app. An app assembled by hand from `swift build` output must copy it too: into
   `Contents/Resources/` on macOS, or the app's root on iOS. Without it, every Mermaid block
   falls back to code. Nothing crashes.
-- 11.x rather than 12.x: 12.2.0's `mermaid.min.js` is 5.5 MB, twice the size of 11.12.1.
 
 ## Self-check
 
